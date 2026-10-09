@@ -1,0 +1,44 @@
+# Delphi build output
+/Win32/
+/Win64/
+/Win64x/
+*.dcu
+*.exe
+*.dll
+*.bpl
+*.dcp
+*.obj
+*.o
+*.map
+*.rsm
+*.tds
+*.drc
+*.stat
+
+# Local IDE settings and recovery files
+*.dproj.local
+*.identcache
+*.dsk
+*.tvsconfig
+*.groupproj.local
+*.~*
+*.bak
+__history/
+__recovery/
+.vs/
+
+# Local application settings and test artifacts
+*.ini
+/tests/HistoryPreview.png
+/HistoryPreview.png
+__pycache__/
+*.pyc
+*.log
+*.tmp
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# FModel.res is required by FModel.dpr and intentionally tracked.

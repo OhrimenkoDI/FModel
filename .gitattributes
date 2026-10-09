@@ -1,0 +1,7 @@
+* text=auto
+*.pas text eol=crlf
+*.dpr text eol=crlf
+*.dproj text eol=crlf
+*.dfm text eol=crlf
+*.md text eol=lf
+*.res binary
