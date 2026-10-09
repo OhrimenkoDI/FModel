@@ -6,7 +6,7 @@ uses
   Winapi.Windows, System.SysUtils, Vcl.Forms,
   uMain in '..\uMain.pas',
   uMotionModel in '..\uMotionModel.pas',
-  uGuidanceController in '..\uGuidanceController.pas';
+  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
 
 // Завершает проверку с ошибкой, если условие не выполнено.
 procedure Check(Value: Boolean; const MessageText: string);

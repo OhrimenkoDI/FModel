@@ -2,10 +2,10 @@ program RegulatorAudit;
 {$APPTYPE CONSOLE}
 uses
   System.SysUtils,
-  uGuidanceController in '..\uGuidanceController.pas';
+  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
 // Проверяет сохранение интегральной составляющей при нулевой ошибке.
 procedure Audit(dt: Double);
-var C: TGuidanceController; I: Integer;
+var C: TAdaptiveRegulator; I: Integer;
 begin
   C.Init;
   C.AngleCorrectionEnabled := False;

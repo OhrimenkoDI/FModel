@@ -3,7 +3,7 @@
 uses System.SysUtils, System.Math, Vcl.Forms,
   uMain in '..\uMain.pas',
   uMotionModel in '..\uMotionModel.pas',
-  uGuidanceController in '..\uGuidanceController.pas';
+  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
 // Проверяет совпадение значений с допустимой погрешностью.
 procedure Near(A,B: Double; const S: string);
 begin
@@ -11,7 +11,7 @@ begin
 end;
 var
   M: TMotionModel;
-  C: TGuidanceController;
+  C: TAdaptiveRegulator;
   F: TForm2;
   I,Config: Integer;
   Dt,FirstAngle: Double;
@@ -25,7 +25,7 @@ begin
       Near(M.W,0,'Plant changed external command');
     end;
     FirstAngle:=M.MeasureAngle;
-    Near(FirstAngle,DegToRad(45+DefaultHeadingOffsetDegrees),'Sensor bias/delay');
+    Near(FirstAngle,DegToRad(45+DefaultSensorBiasDegrees),'Sensor bias/delay');
     Near(M.Fi,0,'Uncontrolled model turned');
     M.W:=0.5;
     M.Integrate(0.02);
@@ -48,9 +48,11 @@ begin
           F.Integrate(Dt);
           Near(F.Model.X,M.X,'Main integration order X');
           Near(F.Model.Y,M.Y,'Main integration order Y');
+          Near(F.Model.ReferencePoint.X,M.ReferencePoint.X,'Reference integration order X');
+          Near(F.Model.ReferencePoint.Y,M.ReferencePoint.Y,'Reference integration order Y');
           Near(F.Model.W,C.W,'Command transmission');
           Near(F.Controller.Wint,C.Wint,'Controller state mismatch');
-          Near(F.Controller.BiasEstimate,C.BiasEstimate,'Bias state mismatch');
+          Near(F.Controller.AdaptiveAngleCorrection,C.AdaptiveAngleCorrection,'Bias state mismatch');
         end;
       end;
       F.InitButtonClick(nil);

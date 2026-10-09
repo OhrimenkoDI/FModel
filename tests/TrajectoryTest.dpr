@@ -3,7 +3,7 @@ program TrajectoryTest;
 uses
   System.SysUtils, Vcl.Forms,
   uMain in '..\uMain.pas', uMotionModel in '..\uMotionModel.pas',
-  uGuidanceController in '..\uGuidanceController.pas';
+  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
 var
   F: TForm2;
   I: Integer;

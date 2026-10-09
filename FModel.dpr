@@ -1,10 +1,11 @@
-program FModel;
+﻿program FModel;
 
 uses
   Vcl.Forms,
   uMain in 'uMain.pas' {Form2},
   uMotionModel in 'uMotionModel.pas',
-  uGuidanceController in 'uGuidanceController.pas';
+  uAdaptiveRegulator in 'uAdaptiveRegulator.pas',
+  uParameters in 'uParameters.pas';
 
 {$R *.res}
 

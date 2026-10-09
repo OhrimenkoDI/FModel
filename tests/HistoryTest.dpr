@@ -1,9 +1,9 @@
 program HistoryTest;
 {$APPTYPE CONSOLE}
 uses
-  System.SysUtils, Vcl.Forms, Vcl.Graphics, Vcl.Imaging.pngimage,
+  System.SysUtils, System.Math, Vcl.Forms, Vcl.Graphics, Vcl.Imaging.pngimage,
   uMain in '..\uMain.pas', uMotionModel in '..\uMotionModel.pas',
-  uGuidanceController in '..\uGuidanceController.pas';
+  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
 // Завершает проверку с ошибкой, если условие не выполнено.
 procedure Check(B: Boolean; const S: string);
 begin
@@ -34,6 +34,10 @@ begin
       Check((A.Step=21) and (B.Step=220),'Ring chronological order');
       Near(A.Time,0.105,'First retained time');
       Near(B.Time,1.1,'Last retained time');
+      Near(A.Model.ReferencePoint.X,A.Model.ReferencePoint.InitialX +
+        A.Model.ReferencePoint.V*Cos(A.Model.ReferencePoint.Fi + 3*deg)*A.Time,'Historical reference X');
+      Near(B.Model.ReferencePoint.Y,B.Model.ReferencePoint.InitialY +
+        B.Model.ReferencePoint.V*Sin(B.Model.ReferencePoint.Fi + 3*deg)*B.Time,'Historical reference Y');
       Check((A.TrajectoryCount=21) and (B.TrajectoryCount=220),'Historical trajectory');
       for I:=0 to 199 do
       begin
@@ -47,6 +51,9 @@ begin
       F.HistorySliderChange(nil);
       Displayed:=F.DisplayFrame;
       Near(Displayed.Model.X,A.Model.X,'Selected model');
+      Near(Displayed.Model.ReferencePoint.X,A.Model.ReferencePoint.X,'Selected reference X');
+      Near(Displayed.Model.ReferencePoint.Y,A.Model.ReferencePoint.Y,'Selected reference Y');
+      Near(F.Model.ReferencePoint.X,B.Model.ReferencePoint.X,'Scrub changed live reference');
       Near(Displayed.Time,A.Time,'Selected time');
       Near(F.Model.X,FinalX,'Scrub changed live model');
       Near(F.SimulationTime,FinalTime,'Scrub changed live clock');

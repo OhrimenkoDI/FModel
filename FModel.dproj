@@ -128,7 +128,8 @@
             <FormType>dfm</FormType>
         </DCCReference>
         <DCCReference Include="uMotionModel.pas"/>
-        <DCCReference Include="uGuidanceController.pas"/>
+        <DCCReference Include="uAdaptiveRegulator.pas"/>
+        <DCCReference Include="uParameters.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
@@ -151,12 +152,6 @@
                 </Source>
             </Delphi.Personality>
             <Deployment Version="5">
-                <DeployFile LocalName="Win32\Debug\FModel.exe" Configuration="Debug" Class="ProjectOutput">
-                    <Platform Name="Win32">
-                        <RemoteName>FModel.exe</RemoteName>
-                        <Overwrite>true</Overwrite>
-                    </Platform>
-                </DeployFile>
                 <DeployFile LocalName="Win32\Debug\FModel.exe" Configuration="Debug" Class="ProjectOutput">
                     <Platform Name="Win32">
                         <RemoteName>FModel.exe</RemoteName>

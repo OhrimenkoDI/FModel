@@ -6,7 +6,7 @@ uses
   System.SysUtils, System.Classes, System.IniFiles, Vcl.Forms, Vcl.Controls, Vcl.Graphics,
   uMain in '..\uMain.pas',
   uMotionModel in '..\uMotionModel.pas',
-  uGuidanceController in '..\uGuidanceController.pas';
+  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
 
 // Завершает проверку с ошибкой, если условие не выполнено.
 procedure Check(Value: Boolean; const MessageText: string);
@@ -27,7 +27,7 @@ begin
     Ini := TMemIniFile.Create(IniName);
     try
       Ini.WriteString('View', 'PixelsPerMetre', '20');
-      Ini.WriteInteger('View', 'OriginX', 120);
+      Ini.WriteInteger('View', 'OriginX', 520);
       Ini.WriteInteger('View', 'OriginY', 100);
       Ini.UpdateFile;
     finally
@@ -35,28 +35,29 @@ begin
     end;
     Form := TForm2.Create(nil);
     try
-      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[130, 100] = clBlue,
+      // Проверяем окружность вне непрозрачного блока показателей.
+      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[530, 100] = clBlue,
         'Loaded scale/origin: circle radius must be 10 pixels');
       // Grabbing near the centre must preserve the mouse offset.
-      Form.Image1MouseDown(Form.Image1, mbLeft, [ssLeft], 123, 102);
-      Form.Image1MouseMove(Form.Image1, [ssLeft], 203, 162);
-      Form.Image1MouseUp(Form.Image1, mbLeft, [], 203, 162);
+      Form.Image1MouseDown(Form.Image1, mbLeft, [ssLeft], 523, 102);
+      Form.Image1MouseMove(Form.Image1, [ssLeft], 603, 162);
+      Form.Image1MouseUp(Form.Image1, mbLeft, [], 603, 162);
     finally
       Form.Free;
     end;
     Form := TForm2.Create(nil);
     try
-      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[210, 160] = clBlue,
+      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[610, 160] = clBlue,
         'Dragged origin was not restored');
       Form.ClientWidth := 800;
       Form.ClientHeight := 500;
       Form.FormResize(Form);
-      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[210, 160] = clBlue,
+      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[610, 160] = clBlue,
         'Resize changed scale or origin');
       // Any background position can pan the coordinate system.
       Form.Image1MouseDown(Form.Image1, mbLeft, [ssLeft], 400, 300);
       Form.Image1MouseUp(Form.Image1, mbLeft, [], 500, 400);
-      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[310, 260] = clBlue,
+      Check(Form.Image1.Picture.Bitmap.Canvas.Pixels[710, 260] = clBlue,
         'Background drag must shift the coordinate system');
       Form.Image1MouseDown(Form.Image1, mbLeft, [ssLeft], 400, 300);
       Form.Image1MouseMove(Form.Image1, [ssLeft], -100, 1100);
@@ -72,7 +73,7 @@ begin
     Ini := TMemIniFile.Create(IniName);
     try
       Check(Ini.ReadString('View', 'PixelsPerMetre', '') = '20', 'Scale not saved');
-      Check(Ini.ReadInteger('View', 'OriginX', -1) = -200, 'Left edge blocked pan');
+      Check(Ini.ReadInteger('View', 'OriginX', -1) = 200, 'Pan displacement changed');
       Check(Ini.ReadInteger('View', 'OriginY', -1) = 1060, 'Bottom edge blocked pan');
       Ini.WriteString('View', 'PixelsPerMetre', 'invalid');
       Ini.WriteInteger('View', 'OriginX', -999);

@@ -1,7 +1,7 @@
 object Form2: TForm2
   Left = 0
   Top = 0
-  Caption = 'FModel - XY projection'
+  Caption = 'FModel - Sensor Dynamics'
   ClientHeight = 679
   ClientWidth = 1096
   Color = clBtnFace

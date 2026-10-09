@@ -6,7 +6,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Math, Vcl.Graphics,
   Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus, System.UITypes,
   System.IniFiles, Vcl.StdCtrls, Vcl.ComCtrls, Winapi.MMSystem, uMotionModel,
-  uGuidanceController;
+  uAdaptiveRegulator, uParameters;
 
 const
   MeasurementHistorySize = 200;
@@ -20,7 +20,7 @@ type
   TTrajectoryBuffer = array[0..TrajectoryCapacity-1] of TTrajectoryPoint;
   TSimulationFrame = record
     Model: TMotionModel;
-    Controller: TGuidanceController;
+    Controller: TAdaptiveRegulator;
     Time, Dt, MinimumDistance: Double;
     Step: Int64;
     StoppedOnDistance: Boolean;
@@ -69,7 +69,7 @@ type
     FStoppedOnDistance: Boolean;
     FMinimumDistance: Double;
     FModel: TMotionModel;
-    FController: TGuidanceController;
+    FController: TAdaptiveRegulator;
     FTrajectory: TTrajectoryBuffer;
     FHistory: array[0..MeasurementHistorySize-1] of TSimulationFrame;
     FHistoryNext, FHistoryCount, FHistoryIndex: Integer;
@@ -81,20 +81,22 @@ type
     FPendingTime: Double;
     FStepCount: Int64;
     FDragging: Boolean;
-    FDraggingTarget: Boolean;
-    FTargetOffsetX, FTargetOffsetY: Double;
+    FDraggingReferencePoint: Boolean;
+    FReferencePointOffsetX, FReferencePointOffsetY: Double;
     FOriginX, FOriginY, FDragOffsetX, FDragOffsetY: Integer;
     FMuXYZ, FFiXYZ: TVec3;
     procedure StopProcess;
     procedure AddHistoryFrame;
     procedure UpdateHistoryControls;
     function GetDisplayFrame: TSimulationFrame;
-    function GetTargetX: Double;
-    function GetTargetY: Double;
+    function GetReferencePointX: Double;
+    function GetReferencePointY: Double;
     procedure UpdateProcessLabel;
+    function GetParameterValues: TParameterValues;
+    procedure ApplyParameterValues(const Values: TParameterValues);
     procedure LoadSettings;
     procedure SaveSettings;
-    function NearTarget(X, Y: Integer): Boolean;
+    function NearReferencePoint(X, Y: Integer): Boolean;
     procedure MoveDraggedPoint(X, Y: Integer);
     function d2x(X, Y, Z: Double): Integer;
     function d2y(X, Y, Z: Double): Integer;
@@ -114,9 +116,9 @@ type
     property LastDt: Double read FLastDt;
     property StepCount: Int64 read FStepCount;
     property Model: TMotionModel read FModel;
-    property Controller: TGuidanceController read FController;
-    property TargetX: Double read GetTargetX;
-    property TargetY: Double read GetTargetY;
+    property Controller: TAdaptiveRegulator read FController;
+    property ReferencePointX: Double read GetReferencePointX;
+    property ReferencePointY: Double read GetReferencePointY;
     property TrajectoryCount: Integer read FTrajectoryCount;
     property MinimumDistance: Double read FMinimumDistance;
   end;
@@ -253,16 +255,16 @@ begin
   RedrawImage;
 end;
 
-// Возвращает координату X неподвижной цели.
-function TForm2.GetTargetX: Double;
+// Возвращает координату X неподвижной опорной точки.
+function TForm2.GetReferencePointX: Double;
 begin
-  Result := FModel.Target.X;
+  Result := FModel.ReferencePoint.X;
 end;
 
-// Возвращает координату Y неподвижной цели.
-function TForm2.GetTargetY: Double;
+// Возвращает координату Y неподвижной опорной точки.
+function TForm2.GetReferencePointY: Double;
 begin
-  Result := FModel.Target.Y;
+  Result := FModel.ReferencePoint.Y;
 end;
 
 // Обновляет время, номер шага и результат расчёта на форме.
@@ -270,14 +272,14 @@ procedure TForm2.UpdateProcessLabel;
 var Frame: TSimulationFrame;
 begin
   Frame := GetDisplayFrame;
-  OffsetLabel.Caption := Format('Смещение датчика: %.0f°', [Frame.Model.HeadingOffsetDegrees]);
+  OffsetLabel.Caption := Format('Смещение датчика: %.0f°', [Frame.Model.SensorBiasDegrees]);
   ProcessLabel.Caption := Format('t = %.3f с; dt = %.4f с; шагов: %d',
     [Frame.Time, Frame.Dt, Frame.Step]);
   if FHistoryIndex >= 0 then ProcessLabel.Caption := ProcessLabel.Caption + ' — просмотр';
   if Frame.StoppedOnDistance then
   begin
     ProcessLabel.Caption := ProcessLabel.Caption + ' — стоп: дистанция растёт';
-    ResultLabel.Caption := Format('Минимальный промах: %.3f м', [Frame.MinimumDistance]);
+    ResultLabel.Caption := Format('Мин. расстояние: %.3f м', [Frame.MinimumDistance]);
   end
   else
     ResultLabel.Caption := '';
@@ -286,8 +288,9 @@ end;
 // Уменьшает смещение датчика на один градус.
 procedure TForm2.OffsetMinusButtonClick(Sender: TObject);
 begin
-  FModel.HeadingOffsetDegrees := FModel.HeadingOffsetDegrees - 1;
+  FModel.SensorBiasDegrees := FModel.SensorBiasDegrees - 1;
   UpdateProcessLabel;
+  SaveSettings;
 end;
 
 // Переключает адаптивную поправку угла и сохраняет настройку.
@@ -301,8 +304,9 @@ end;
 // Увеличивает смещение датчика на один градус.
 procedure TForm2.OffsetPlusButtonClick(Sender: TObject);
 begin
-  FModel.HeadingOffsetDegrees := FModel.HeadingOffsetDegrees + 1;
+  FModel.SensorBiasDegrees := FModel.SensorBiasDegrees + 1;
   UpdateProcessLabel;
+  SaveSettings;
 end;
 
 // Сбрасывает движение, время расчёта, траекторию и историю.
@@ -313,9 +317,9 @@ begin
   FHistoryNext := 0;
   FHistoryIndex := -1;
   FModel.ResetMotion;
-  FController.Init;
+  FController.Reset;
   FController.AngleCorrectionEnabled := AngleCorrectionCheckBox.Checked;
-  FMinimumDistance := Hypot(FModel.Target.X - FModel.X, FModel.Target.Y - FModel.Y);
+  FMinimumDistance := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
   FStoppedOnDistance := False;
   FTrajectoryCount := 0;
   FSimulationTime := 0;
@@ -340,7 +344,7 @@ begin
   if not QueryPerformanceCounter(FLastCounter) then
     raise Exception.Create('Не удалось прочитать системное время.');
   FTimerResolutionActive := timeBeginPeriod(1) = TIMERR_NOERROR;
-  FMinimumDistance := Hypot(FModel.Target.X - FModel.X, FModel.Target.Y - FModel.Y);
+  FMinimumDistance := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
   FStoppedOnDistance := False;
   IntegratorTimer.Enabled := True;
   StartStopButton.Caption := 'Стоп';
@@ -404,7 +408,7 @@ procedure TForm2.Integrate(dt: Double);
 var
   DistanceBefore, DistanceAfter: Double;
 begin
-  DistanceBefore := Hypot(FModel.Target.X - FModel.X, FModel.Target.Y - FModel.Y);
+  DistanceBefore := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
   if IsNan(dt) or IsInfinite(dt) or (dt < 0) then
     raise EArgumentException.Create('dt must be finite and non-negative');
   if dt = 0 then Exit;
@@ -416,7 +420,7 @@ begin
   Inc(FStepCount);
   AddTrajectoryPoint;
   FSimulationTime := FSimulationTime + dt;
-  DistanceAfter := Hypot(FModel.Target.X - FModel.X, FModel.Target.Y - FModel.Y);
+  DistanceAfter := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
   FMinimumDistance := Min(FMinimumDistance, Min(DistanceBefore, DistanceAfter));
   if IntegratorTimer.Enabled and (DistanceAfter > DistanceBefore + 1E-9) then
   begin
@@ -537,75 +541,96 @@ begin
   begin
     FDragOffsetX := P.X - FOriginX;
     FDragOffsetY := P.Y - FOriginY;
-    FTargetOffsetX := (P.X - FOriginX) / NewScale - FModel.Target.X;
-    FTargetOffsetY := (FOriginY - P.Y) / NewScale - FModel.Target.Y;
+    FReferencePointOffsetX := (P.X - FOriginX) / NewScale - FModel.ReferencePoint.X;
+    FReferencePointOffsetY := (FOriginY - P.Y) / NewScale - FModel.ReferencePoint.Y;
   end;
   RedrawImage;
   SaveSettings;
 end;
 
-// Загружает параметры модели и отображения из INI-файла.
-procedure TForm2.LoadSettings;
-var
-  Ini: TMemIniFile;
-  Scale: Double;
+// Собирает настройки формы, модели и регулятора; углы для интерфейса — в градусах.
+function TForm2.GetParameterValues: TParameterValues;
 begin
-  Ini := TMemIniFile.Create(ChangeFileExt(ParamStr(0), '.ini'));
-  try
-    FController.AngleCorrectionEnabled := Ini.ReadBool('Controller', 'AngleCorrection', True);
-    if TryStrToFloat(Ini.ReadString('View', 'PixelsPerMetre', '10'),
-      Scale, TFormatSettings.Invariant) then
-      if not IsNan(Scale) and not IsInfinite(Scale) and
-        (Scale >= 0.1) and (Scale <= 10000) then
-      begin
-        FMuXYZ[0] := Scale;
-        FMuXYZ[1] := Scale;
-      end;
-    FOriginX := Ini.ReadInteger('View', 'OriginX', FOriginX);
-    if TryStrToFloat(Ini.ReadString('Model', 'Diameter', '1'), Scale,
-      TFormatSettings.Invariant) then
-      if not IsNan(Scale) and not IsInfinite(Scale) and (Scale > 0) and (Scale <= 10000) then
-        FModel.Diameter := Scale;
-    if TryStrToFloat(Ini.ReadString('Target', 'Diameter', '1'), Scale,
-      TFormatSettings.Invariant) then
-      if not IsNan(Scale) and not IsInfinite(Scale) and (Scale > 0) and (Scale <= 10000) then
-        FModel.Target.Diameter := Scale;
-    FOriginY := Ini.ReadInteger('View', 'OriginY', FOriginY);
-    if TryStrToFloat(Ini.ReadString('Target', 'X', '100'), Scale,
-      TFormatSettings.Invariant) then
-      if not IsNan(Scale) and not IsInfinite(Scale) and (Abs(Scale) <= 1E9) then
-        FModel.Target.X := Scale;
-    if TryStrToFloat(Ini.ReadString('Target', 'Y', '100'), Scale,
-      TFormatSettings.Invariant) then
-      if not IsNan(Scale) and not IsInfinite(Scale) and (Abs(Scale) <= 1E9) then
-        FModel.Target.Y := Scale;
-  finally
-    Ini.Free;
-  end;
+  Result[0] := FMuXYZ[0];
+  Result[1] := FModel.ReferencePoint.InitialX;
+  Result[2] := FModel.ReferencePoint.InitialY;
+  Result[3] := FModel.Diameter;
+  Result[4] := FModel.ReferencePoint.Diameter;
+  Result[5] := FModel.AngleCount;
+  Result[6] := FModel.SensorBiasDegrees;
+  Result[7] := FModel.ReferencePoint.SpeedKmh;
+  Result[8] := FModel.ReferencePoint.HeadingDegrees;
+  Result[9] := FController.Parameters.Kp;
+  Result[10] := FController.Parameters.Ki;
+  Result[11] := FController.Parameters.Kd;
+  Result[12] := FController.Parameters.IntegralLimit;
+  Result[13] := FController.Parameters.BiasAdaptationGain;
+  Result[14] := FController.Parameters.BiasAngularSpeedWeight;
+  Result[15] := FController.Parameters.BiasAdaptationStart;
+  Result[16] := FController.Parameters.BiasFilterTime;
+  Result[17] := RadToDeg(FController.Parameters.BiasErrorGate);
+  Result[18] := RadToDeg(FController.Parameters.BiasRateLimit);
+  Result[19] := RadToDeg(FController.Parameters.BiasLimit);
+  Result[20] := FController.Parameters.DerivativeFilterTime;
 end;
 
-// Сохраняет параметры модели и отображения в INI-файле.
-procedure TForm2.SaveSettings;
-var
-  Ini: TMemIniFile;
+// Передаёт проверенные настройки их владельцам, не связывая модель с регулятором.
+procedure TForm2.ApplyParameterValues(const Values: TParameterValues);
+begin
+  FMuXYZ[0] := Values[0];
+  FModel.ReferencePoint.InitialX := Values[1];
+  FModel.ReferencePoint.InitialY := Values[2];
+  FModel.Diameter := Values[3];
+  FModel.ReferencePoint.Diameter := Values[4];
+  FModel.AngleCount := Round(Values[5]);
+  FModel.SensorBiasDegrees := Values[6];
+  FModel.ReferencePoint.SpeedKmh := Values[7];
+  FModel.ReferencePoint.HeadingDegrees := Values[8];
+  FController.Parameters.Kp := Values[9];
+  FController.Parameters.Ki := Values[10];
+  FController.Parameters.Kd := Values[11];
+  FController.Parameters.IntegralLimit := Values[12];
+  FController.Parameters.BiasAdaptationGain := Values[13];
+  FController.Parameters.BiasAngularSpeedWeight := Values[14];
+  FController.Parameters.BiasAdaptationStart := Values[15];
+  FController.Parameters.BiasFilterTime := Values[16];
+  FController.Parameters.BiasErrorGate := DegToRad(Values[17]);
+  FController.Parameters.BiasRateLimit := DegToRad(Values[18]);
+  FController.Parameters.BiasLimit := DegToRad(Values[19]);
+  FController.Parameters.DerivativeFilterTime := Values[20];
+  FMuXYZ[1] := FMuXYZ[0];
+end;
+
+// Загружает параметры из INI; отсутствующие и некорректные значения заменяются исходными.
+procedure TForm2.LoadSettings;
+var Ini: TMemIniFile; Values: TParameterValues;
 begin
   Ini := TMemIniFile.Create(ChangeFileExt(ParamStr(0), '.ini'));
   try
-    Ini.WriteString('View', 'PixelsPerMetre',
-      FloatToStr(FMuXYZ[0], TFormatSettings.Invariant));
+    Values := DefaultParameterValues;
+    ReadParameterValues(Ini, Values);
+    ApplyParameterValues(Values);
+    FController.AngleCorrectionEnabled := Ini.ReadBool('Controller', 'AngleCorrection', True);
+    FOriginX := Ini.ReadInteger('View', 'OriginX', FOriginX);
+    FOriginY := Ini.ReadInteger('View', 'OriginY', FOriginY);
+  finally Ini.Free; end;
+end;
+
+// Сохраняет параметры обеих моделей, регулятора и отображения в INI-файле.
+procedure TForm2.SaveSettings;
+var Ini: TMemIniFile;
+begin
+  Ini := TMemIniFile.Create(ChangeFileExt(ParamStr(0), '.ini'));
+  try
+    WriteParameterValues(Ini, GetParameterValues);
     Ini.DeleteKey('Controller', 'DelayCorrection');
     Ini.DeleteKey('Sensor', 'HeadingOffsetEnabled');
     Ini.WriteBool('Controller', 'AngleCorrection', FController.AngleCorrectionEnabled);
     Ini.WriteInteger('View', 'OriginX', FOriginX);
-    Ini.WriteString('Model', 'Diameter', FloatToStr(FModel.Diameter, TFormatSettings.Invariant));
-    Ini.WriteString('Target', 'Diameter', FloatToStr(FModel.Target.Diameter, TFormatSettings.Invariant));
     Ini.WriteInteger('View', 'OriginY', FOriginY);
-    Ini.WriteString('Target', 'X', FloatToStr(FModel.Target.X, TFormatSettings.Invariant));
-    Ini.WriteString('Target', 'Y', FloatToStr(FModel.Target.Y, TFormatSettings.Invariant));
+    Ini.EraseSection('Target');
     Ini.UpdateFile;
-  finally
-    Ini.Free;
-  end;
+  finally Ini.Free; end;
 end;
 
 // Останавливает расчёт и сохраняет настройки при закрытии формы.
@@ -615,42 +640,44 @@ begin
   SaveSettings;
 end;
 
-// Начинает перетаскивание цели или системы координат.
+// Начинает перетаскивание опорной точки или системы координат.
 procedure TForm2.Image1MouseDown(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 begin
   if Button <> mbLeft then
     Exit;
-  FDraggingTarget := (FHistoryIndex < 0) and NearTarget(X, Y);
+  FDraggingReferencePoint := (FHistoryIndex < 0) and NearReferencePoint(X, Y);
   FDragging := True;
-  FTargetOffsetX := (X - FOriginX) / FMuXYZ[0] - FModel.Target.X;
-  FTargetOffsetY := (FOriginY - Y) / FMuXYZ[1] - FModel.Target.Y;
+  FReferencePointOffsetX := (X - FOriginX) / FMuXYZ[0] - FModel.ReferencePoint.X;
+  FReferencePointOffsetY := (FOriginY - Y) / FMuXYZ[1] - FModel.ReferencePoint.Y;
   FDragOffsetX := X - FOriginX;
   FDragOffsetY := Y - FOriginY;
   SetCaptureControl(Image1);
   Image1.Cursor := crSizeAll;
 end;
 
-// Проверяет попадание указателя мыши в область цели.
-function TForm2.NearTarget(X, Y: Integer): Boolean;
+// Проверяет попадание указателя мыши в область опорной точки.
+function TForm2.NearReferencePoint(X, Y: Integer): Boolean;
 var
   DX, DY, HitRadius: Double;
 begin
-  DX := X - (FOriginX + FModel.Target.X * FMuXYZ[0]);
-  DY := Y - (FOriginY - FModel.Target.Y * FMuXYZ[1]);
-  HitRadius := Max(8.0, FModel.Target.Diameter * FMuXYZ[0] / 2);
+  DX := X - (FOriginX + FModel.ReferencePoint.X * FMuXYZ[0]);
+  DY := Y - (FOriginY - FModel.ReferencePoint.Y * FMuXYZ[1]);
+  HitRadius := Max(8.0, FModel.ReferencePoint.Diameter * FMuXYZ[0] / 2);
   Result := Sqr(DX) + Sqr(DY) <= Sqr(HitRadius);
 end;
 
-// Смещает перетаскиваемую цель или начало координат.
+// Смещает перетаскиваемую опорную точку или начало координат.
 procedure TForm2.MoveDraggedPoint(X, Y: Integer);
 begin
-  if FDraggingTarget then
+  if FDraggingReferencePoint then
   begin
-    FModel.Target.X := (EnsureRange(X, 0, Image1.Width - 1) - FOriginX) /
-      FMuXYZ[0] - FTargetOffsetX;
-    FModel.Target.Y := (FOriginY - EnsureRange(Y, 0, Image1.Height - 1)) /
-      FMuXYZ[1] - FTargetOffsetY;
+    FModel.ReferencePoint.X := (EnsureRange(X, 0, Image1.Width - 1) - FOriginX) /
+      FMuXYZ[0] - FReferencePointOffsetX;
+    FModel.ReferencePoint.Y := (FOriginY - EnsureRange(Y, 0, Image1.Height - 1)) /
+      FMuXYZ[1] - FReferencePointOffsetY;
+    FModel.ReferencePoint.InitialX := FModel.ReferencePoint.X;
+    FModel.ReferencePoint.InitialY := FModel.ReferencePoint.Y;
   end
   else
   begin
@@ -692,44 +719,16 @@ begin
   SaveSettings;
 end;
 
-// Открывает диалог параметров, проверяет и применяет введённые значения.
+// Приостанавливает расчёт; подтверждённые настройки сохраняет и применяет с инициализацией.
 procedure TForm2.ParametersMenuClick(Sender: TObject);
-var
-  Values: TArray<string>;
-  Scale, TX, TY, ModelDiameter, TargetDiameter: Double;
+var Values: TParameterValues;
 begin
-  Values := TArray<string>.Create(FloatToStr(FMuXYZ[0]),
-    FloatToStr(FModel.Target.X), FloatToStr(FModel.Target.Y),
-    FloatToStr(FModel.Diameter), FloatToStr(FModel.Target.Diameter));
-  while InputQuery('Параметры', ['Масштаб, пикселей на метр (0,1–10000):',
-    'Красная точка X, м:', 'Красная точка Y, м:',
-    'Диаметр движущейся модели, м:', 'Диаметр статической модели, м:'], Values) do
-  begin
-    if TryStrToFloat(Values[0], Scale) and TryStrToFloat(Values[1], TX) and
-      TryStrToFloat(Values[2], TY) and TryStrToFloat(Values[3], ModelDiameter) and
-      TryStrToFloat(Values[4], TargetDiameter) then
-      if not IsNan(Scale) and not IsInfinite(Scale) and
-         (Scale >= 0.1) and (Scale <= 10000) and
-         not IsNan(TX) and not IsInfinite(TX) and (Abs(TX) <= 1E9) and
-         not IsNan(TY) and not IsInfinite(TY) and (Abs(TY) <= 1E9) and
-         not IsNan(ModelDiameter) and not IsInfinite(ModelDiameter) and
-         (ModelDiameter > 0) and (ModelDiameter <= 10000) and
-         not IsNan(TargetDiameter) and not IsInfinite(TargetDiameter) and
-         (TargetDiameter > 0) and (TargetDiameter <= 10000) then
-      begin
-        FModel.Diameter := ModelDiameter;
-        FModel.Target.Diameter := TargetDiameter;
-        FModel.Target.X := TX;
-        FModel.Target.Y := TY;
-        FMuXYZ[0] := Scale;
-        FMuXYZ[1] := Scale;
-        RedrawImage;
-        SaveSettings;
-        Exit;
-      end;
-    MessageDlg('Масштаб: от 0,1 до 10000. Координаты: в пределах ±1 млрд м. Диаметры: больше 0, не более 10000 м.',
-      mtError, [mbOK], 0);
-  end;
+  StopProcess;
+  Values := GetParameterValues;
+  if not EditParameters(Values) then Exit;
+  ApplyParameterValues(Values);
+  InitButtonClick(nil);
+  SaveSettings;
 end;
 
 // Преобразует пространственные координаты в горизонтальную координату экрана.
@@ -770,8 +769,31 @@ end;
 procedure TForm2.RedrawImage;
 var
   Frame: TSimulationFrame;
-  I, W, H, CX, CY: Integer;
+  I, W, H, CX, CY, LineHeight, InfoWidth, LabelCount: Integer;
+  InfoLines: TArray<string>;
+  LabelRects: array[0..6] of TRect;
   A, B, Radius, LeftX, RightX, BottomY, TopY, GridStep, Arrow, Angle: Double;
+
+  // Размещает подпись оси в пределах изображения без пересечения с другими надписями.
+  procedure DrawAxisLabel(X, Y: Integer; const S: string);
+  var R: TRect; J, LabelWidth, LabelHeight: Integer;
+  begin
+    with Image1.Picture.Bitmap.Canvas do
+    begin
+      LabelWidth := Image1.Picture.Bitmap.Canvas.TextWidth(S);
+      LabelHeight := Image1.Picture.Bitmap.Canvas.TextHeight(S);
+      if (LabelWidth + 8 > W) or (LabelHeight + 8 > H) then Exit;
+      X := EnsureRange(X, 4, W - LabelWidth - 4);
+      Y := EnsureRange(Y, 4, H - LabelHeight - 4);
+      R := Rect(X - 3, Y - 3, X + LabelWidth + 3, Y + LabelHeight + 3);
+      for J := 0 to LabelCount - 1 do
+        if (R.Left < LabelRects[J].Right) and (R.Right > LabelRects[J].Left) and
+           (R.Top < LabelRects[J].Bottom) and (R.Bottom > LabelRects[J].Top) then Exit;
+      LabelRects[LabelCount] := R;
+      Inc(LabelCount);
+      TextOut(X, Y, S);
+    end;
+  end;
 begin
   Frame := GetDisplayFrame;
   W := Image1.Width;
@@ -823,63 +845,72 @@ begin
         Frame.Model.X + Radius * Cos(B), Frame.Model.Y + Radius * Sin(B), 0, clBlue);
     end;
 
-  Radius := Frame.Model.Target.Diameter / 2;
-  if (Frame.Model.Target.X + Radius >= LeftX) and (Frame.Model.Target.X - Radius <= RightX) and
-     (Frame.Model.Target.Y + Radius >= BottomY) and (Frame.Model.Target.Y - Radius <= TopY) then
+  Radius := Frame.Model.ReferencePoint.Diameter / 2;
+  if (Frame.Model.ReferencePoint.X + Radius >= LeftX) and (Frame.Model.ReferencePoint.X - Radius <= RightX) and
+     (Frame.Model.ReferencePoint.Y + Radius >= BottomY) and (Frame.Model.ReferencePoint.Y - Radius <= TopY) then
     with Image1.Picture.Bitmap.Canvas do
     begin
       Pen.Color := clRed;
       Pen.Width := 1;
       Brush.Style := bsSolid;
       Brush.Color := clRed;
-      Ellipse(d2x(Frame.Model.Target.X - Radius, Frame.Model.Target.Y, 0),
-        d2y(Frame.Model.Target.X, Frame.Model.Target.Y + Radius, 0),
-        d2x(Frame.Model.Target.X + Radius, Frame.Model.Target.Y, 0),
-        d2y(Frame.Model.Target.X, Frame.Model.Target.Y - Radius, 0));
+      Ellipse(d2x(Frame.Model.ReferencePoint.X - Radius, Frame.Model.ReferencePoint.Y, 0),
+        d2y(Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y + Radius, 0),
+        d2x(Frame.Model.ReferencePoint.X + Radius, Frame.Model.ReferencePoint.Y, 0),
+        d2y(Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y - Radius, 0));
       Brush.Style := bsClear;
     end;
 
+  // Каждому показателю отведена своя строка; высота зависит от фактического шрифта.
+  SetLength(InfoLines, 12);
+  InfoLines[0] := Format('Масштаб: %.3f пкс/м; диаметры: %g / %g м',
+    [FMuXYZ[0], Frame.Model.Diameter, Frame.Model.ReferencePoint.Diameter]);
+  InfoLines[1] := Format('Область: %.2f x %.2f м; сетка: %g м',
+    [W / FMuXYZ[0], H / FMuXYZ[1], GridStep]);
+  InfoLines[2] := Format('X = %.2f м; Y = %.2f м; Fi = %.3f рад; V = %.1f км/ч',
+    [Frame.Model.X, Frame.Model.Y, Frame.Model.Fi, Frame.Model.V / KmhToMetresPerSecond]);
+  InfoLines[3] := Format('Опорная точка: X = %.2f м; Y = %.2f м; Fi = %.1f°; V = %.1f км/ч',
+    [Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y,
+     RadToDeg(Frame.Model.ReferencePoint.Fi), Frame.Model.ReferencePoint.V / KmhToMetresPerSecond]);
+  if Frame.Model.TryAngleToPoint(Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y, Angle) then
+    InfoLines[4] := Format('Угол на опорную точку: %.2f°', [Angle])
+  else
+    InfoLines[4] := 'Угол на опорную точку: не определён';
+  InfoLines[5] := 'Задержка: не оценивается';
+  if Frame.Controller.AngleCorrectionEnabled then
+    InfoLines[6] := Format('Поправка измерения: %.2f°',
+      [RadToDeg(Frame.Controller.AdaptiveAngleCorrection)])
+  else
+    InfoLines[6] := 'Поправка измерения: отключена';
+  InfoLines[7] := Format('Измеренный угол после коррекции: %.2f°',
+    [RadToDeg(Frame.Controller.CorrectedAngle)]);
+  InfoLines[8] := Format('Измеренный угол: %.4f°', [RadToDeg(Frame.Model.MeasuredAngle)]);
+  InfoLines[9] := Format('P = %.6f; I = %.6f; D = %.6f рад/с',
+    [Frame.Controller.Wprop, Frame.Controller.Wint, Frame.Controller.Wdiff]);
+  InfoLines[10] := Format('Выход регулятора W = %.6f рад/с', [Frame.Controller.W]);
+  InfoLines[11] := Format('Входная угловая скорость W = %.6f рад/с', [Frame.Controller.InputW]);
   with Image1.Picture.Bitmap.Canvas do
   begin
     Font.Color := clBlack;
-    TextOut(8, 8, Format('Масштаб: %g пкс/м; диаметры: %g / %g м',
-      [FMuXYZ[0], Frame.Model.Diameter, Frame.Model.Target.Diameter]));
-    TextOut(8, 28, Format('Область: %g x %g м; сетка: %g м',
-      [W / FMuXYZ[0], H / FMuXYZ[1], GridStep]));
-    TextOut(8, 48, Format('X = %.2f м; Y = %.2f м; Fi = %.3f рад; V = %.1f км/ч',
-      [Frame.Model.X, Frame.Model.Y, Frame.Model.Fi, Frame.Model.V / KmhToMetresPerSecond]));
-    TextOut(8, 68, Format('Красная точка: X = %.2f м; Y = %.2f м', [Frame.Model.Target.X, Frame.Model.Target.Y]));
-    if Frame.Model.TryAngleToPoint(Frame.Model.Target.X, Frame.Model.Target.Y, Angle) then
-      TextOut(8, 88, Format('Угол на красную точку: %.2f°', [Angle]))
-    else
-      TextOut(8, 88, 'Угол на красную точку: не определён');
-    TextOut(8, 108, 'Задержка: не оценивается');
-    if Frame.Controller.AngleCorrectionEnabled then
-    begin
-      TextOut(8, 108, Format('Адаптивная поправка BiasEstimate: %.2f°',
-        [RadToDeg(Frame.Controller.BiasEstimate)]));
-    end
-    else
-    begin
-      TextOut(8, 108, 'Адаптивная поправка: отключена');
-    end;
-    TextOut(8, 128, Format('Угол на цель после коррекции: %.2f°',
-      [RadToDeg(Frame.Controller.CorrectedAngle)]));
-    TextOut(8, 148, Format('Измеренный угол: %.4f°',
-      [RadToDeg(Frame.Model.MeasuredAngle)]));
-    TextOut(8, 168, Format('P = %.6f; I = %.6f; D = %.6f рад/с',
-      [Frame.Controller.Wprop, Frame.Controller.Wint, Frame.Controller.Wdiff]));
-    TextOut(8, 188, Format('Выход регулятора W = %.6f рад/с',
-      [Frame.Controller.W]));
-    TextOut(8, 208, Format('Входная угловая скорость W = %.6f рад/с',
-      [Frame.Controller.InputW]));
-    TextOut(8, CY + 4, Format('%g м', [LeftX]));
-    TextOut(W - 90, CY + 4, Format('%g м', [RightX]));
-    TextOut(W - 25, CY - 20, 'X');
-    TextOut(CX + 10, 8, Format('Y  %g м', [TopY]));
-    TextOut(CX + 10, H - 22, Format('%g м', [BottomY]));
-    TextOut(CX + 10, CY + 4, '0; Z');
+    LineHeight := TextHeight('Ag') + 5;
+    InfoWidth := 0;
+    for I := 0 to High(InfoLines) do
+      InfoWidth := Max(InfoWidth, TextWidth(InfoLines[I]));
+    LabelRects[0] := Rect(0, 0, Min(W, InfoWidth + 16), Min(H, 16 + Length(InfoLines) * LineHeight));
+    LabelCount := 1;
+    // Непрозрачный фон отделяет показатели от сетки, осей и траекторий.
     Brush.Style := bsSolid;
+    Brush.Color := clWhite;
+    FillRect(LabelRects[0]);
+    for I := 0 to High(InfoLines) do
+      TextOut(8, 8 + I * LineHeight, InfoLines[I]);
+    DrawAxisLabel(8, CY + 4, Format('%.2f м', [LeftX]));
+    DrawAxisLabel(W - TextWidth(Format('%.2f м', [RightX])) - 8, CY + 4,
+      Format('%.2f м', [RightX]));
+    DrawAxisLabel(W - 25, CY - 20, 'X');
+    DrawAxisLabel(CX + 10, 8, Format('Y  %.2f м', [TopY]));
+    DrawAxisLabel(CX + 10, H - LineHeight - 4, Format('%.2f м', [BottomY]));
+    DrawAxisLabel(CX + 10, CY + 4, '0; Z');
   end;
   Image1.Invalidate;
 end;

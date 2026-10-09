@@ -3,7 +3,7 @@
 uses
   Winapi.Windows, System.SysUtils, System.Math, System.IniFiles, Vcl.Forms,
   uMain in '..\uMain.pas', uMotionModel in '..\uMotionModel.pas',
-  uGuidanceController in '..\uGuidanceController.pas';
+  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
 var
   F: TForm2;
   Ini: TMemIniFile;
@@ -16,19 +16,19 @@ begin
     Name := ChangeFileExt(ParamStr(0), '.ini');
     Ini := TMemIniFile.Create(Name);
     try
-      Ini.WriteString('Target', 'X', '1');
-      Ini.WriteString('Target', 'Y', '0');
+      Ini.WriteString('ReferencePoint', 'X', '1');
+      Ini.WriteString('ReferencePoint', 'Y', '0');
       Ini.UpdateFile;
     finally Ini.Free; end;
     F := TForm2.Create(nil);
     try
       F.StartStopButtonClick(nil);
-      Minimum := Hypot(F.TargetX - F.Model.X, F.TargetY - F.Model.Y);
+      Minimum := Hypot(F.ReferencePointX - F.Model.X, F.ReferencePointY - F.Model.Y);
       for I := 1 to 100 do
       begin
-        BeforeDistance := Hypot(F.TargetX - F.Model.X, F.TargetY - F.Model.Y);
+        BeforeDistance := Hypot(F.ReferencePointX - F.Model.X, F.ReferencePointY - F.Model.Y);
         F.Integrate(0.01);
-        AfterDistance := Hypot(F.TargetX - F.Model.X, F.TargetY - F.Model.Y);
+        AfterDistance := Hypot(F.ReferencePointX - F.Model.X, F.ReferencePointY - F.Model.Y);
         Minimum := Min(Minimum, AfterDistance);
         if AfterDistance > BeforeDistance + 1E-9 then
         begin
@@ -37,7 +37,7 @@ begin
         end;
         if not F.IntegratorTimer.Enabled then raise Exception.Create('Stopped while approaching');
       end;
-      if F.IntegratorTimer.Enabled then raise Exception.Create('Target was not passed');
+      if F.IntegratorTimer.Enabled then raise Exception.Create('ReferencePoint was not passed');
       if not F.HistorySlider.Enabled then raise Exception.Create('No playback after auto stop');
       if not F.HistoryFrame(F.HistoryCount-1).StoppedOnDistance then
         raise Exception.Create('Final stop frame not recorded');

@@ -1,10 +1,10 @@
-﻿unit uGuidanceController;
+﻿unit uAdaptiveRegulator;
 interface
 const
   Kp = 6.0;
   Ki = 10.0;
-  Kd = 0.90;
-  IntegralLimit = 50.0;
+  Kd = 0.500;
+  IntegralLimit = 10.0;
   BiasAdaptationGain = 0.15;
   BiasAngularSpeedWeight = 2.0;
   BiasAdaptationStart = 0.8; // Время на начальный разворот, с.
@@ -14,17 +14,26 @@ const
   BiasLimit = 45.0 * Pi / 180;
   DerivativeFilterTime = 0.02;
 type
-  TGuidanceController = record
+  TRegulatorParameters = record
+    Kp, Ki, Kd, IntegralLimit: Double;
+    BiasAdaptationGain, BiasAngularSpeedWeight, BiasAdaptationStart, BiasFilterTime: Double;
+    BiasErrorGate, BiasRateLimit, BiasLimit, DerivativeFilterTime: Double;
+    procedure Init;
+  end;
+
+  TAdaptiveRegulator = record
   private
     FPreviousError, FPreviousDt: Double;
     FTime, FFilteredIntegral, FFilteredW: Double;
     FHasAngle, FPreviousAngleCorrection: Boolean;
   public
+    Parameters: TRegulatorParameters;
     AngleCorrectionEnabled: Boolean;
-    BiasEstimate, CorrectedAngle: Double;
+    AdaptiveAngleCorrection, CorrectedAngle: Double;
     W, Wprop, Wint, Wdiff: Double;
     InputW: Double; // Полученная текущая угловая скорость, рад/с.
     procedure Init;
+    procedure Reset;
     function Update(dt, MeasuredAngle, CurrentW: Double): Double;
   end;
 implementation
@@ -34,19 +43,49 @@ function Wrap(A: Double): Double;
 begin
   Result:=ArcTan2(Sin(A),Cos(A));
 end;
-// Обнуляет состояние регулятора и задаёт начальные настройки.
-procedure TGuidanceController.Init;
+// Заполняет параметры регулятора значениями по умолчанию.
+procedure TRegulatorParameters.Init;
 begin
-  Self:=Default(TGuidanceController);
+  Self.Kp:=uAdaptiveRegulator.Kp;
+  Self.Ki:=uAdaptiveRegulator.Ki;
+  Self.Kd:=uAdaptiveRegulator.Kd;
+  Self.IntegralLimit:=uAdaptiveRegulator.IntegralLimit;
+  Self.BiasAdaptationGain:=uAdaptiveRegulator.BiasAdaptationGain;
+  Self.BiasAngularSpeedWeight:=uAdaptiveRegulator.BiasAngularSpeedWeight;
+  Self.BiasAdaptationStart:=uAdaptiveRegulator.BiasAdaptationStart;
+  Self.BiasFilterTime:=uAdaptiveRegulator.BiasFilterTime;
+  Self.BiasErrorGate:=uAdaptiveRegulator.BiasErrorGate;
+  Self.BiasRateLimit:=uAdaptiveRegulator.BiasRateLimit;
+  Self.BiasLimit:=uAdaptiveRegulator.BiasLimit;
+  Self.DerivativeFilterTime:=uAdaptiveRegulator.DerivativeFilterTime;
+end;
+
+// Обнуляет состояние регулятора и задаёт начальные настройки.
+procedure TAdaptiveRegulator.Init;
+begin
+  Self:=Default(TAdaptiveRegulator);
+  Parameters.Init;
   AngleCorrectionEnabled:=True;
   FPreviousAngleCorrection:=True;
 end;
+// Обнуляет накопленные величины, сохраняя параметры и состояние коррекции.
+procedure TAdaptiveRegulator.Reset;
+var SavedParameters: TRegulatorParameters; Enabled: Boolean;
+begin
+  SavedParameters:=Parameters;
+  Enabled:=AngleCorrectionEnabled;
+  Init;
+  Parameters:=SavedParameters;
+  AngleCorrectionEnabled:=Enabled;
+  FPreviousAngleCorrection:=Enabled;
+end;
+
 // Адаптирует поправку по Wint и текущей W, затем возвращает сумму P, I и D.
-// dt — текущий шаг, с; MeasuredAngle — полученный угол на цель, рад;
+// dt — текущий шаг, с; MeasuredAngle — полученный угол к опорной точке, рад;
 // CurrentW — угловая скорость до нового воздействия, рад/с.
-// Результат — новая команда угловой скорости, рад/с.
-// Координаты, истинные смещение и задержка датчика здесь неизвестны.
-function TGuidanceController.Update(dt, MeasuredAngle, CurrentW: Double): Double;
+// Результат — рассчитанная угловая скорость объекта, рад/с.
+// Входные данные: измеренный угол, длительность шага и текущая угловая скорость объекта.
+function TAdaptiveRegulator.Update(dt, MeasuredAngle, CurrentW: Double): Double;
 var First: Boolean; Alpha, BiasRate, RawDerivative: Double;
 begin
   // Некорректный вход отклоняем до изменения внутреннего состояния.
@@ -63,51 +102,54 @@ begin
   InputW:=CurrentW;
 
   // Сглаживаем Wint прошлого шага и текущую скорость для медленной адаптации.
-  // Alpha учитывает dt; BiasFilterTime задаёт постоянную времени фильтра.
-  Alpha:=1-Exp(-dt/BiasFilterTime);
+  // Alpha учитывает dt; Parameters.BiasFilterTime задаёт постоянную времени фильтра.
+  if Parameters.BiasFilterTime = 0 then Alpha:=1
+  else Alpha:=1-Exp(-dt/Parameters.BiasFilterTime);
+  if Parameters.Ki = 0 then begin Wint:=0; FFilteredIntegral:=0; end;
   FFilteredIntegral:=FFilteredIntegral+Alpha*(Wint-FFilteredIntegral);
   FFilteredW:=FFilteredW+Alpha*(CurrentW-FFilteredW);
 
   // Поправку меняем только при включённой коррекции, после начального разворота
   // и при небольшом исправленном угле прошлого шага. Иначе сохраняем её значение.
-  if AngleCorrectionEnabled and FHasAngle and (FTime>=BiasAdaptationStart) and
-    (Abs(FPreviousError)<BiasErrorGate) then
+  if AngleCorrectionEnabled and FHasAngle and (FTime>=Parameters.BiasAdaptationStart) and
+    (Abs(FPreviousError)<Parameters.BiasErrorGate) then
   begin
     // Подстраиваем поправку против взвешенной суммы сглаженных Wint и W.
     // BiasRate — скорость изменения поправки, ограниченная в рад/с.
-    // Это эвристика: сигналы могут взаимно компенсироваться, не став нулевыми.
-    BiasRate:=EnsureRange(-BiasAdaptationGain*
-      (FFilteredIntegral+BiasAngularSpeedWeight*FFilteredW),-BiasRateLimit,BiasRateLimit);
+    // Адаптация использует сумму двух сигналов; взаимная компенсация возможна при ненулевых слагаемых.
+    BiasRate:=EnsureRange(-Parameters.BiasAdaptationGain*
+      (FFilteredIntegral+Parameters.BiasAngularSpeedWeight*FFilteredW),-Parameters.BiasRateLimit,Parameters.BiasRateLimit);
 
     // Интегрируем скорость поправки по времени и ограничиваем сам угол.
-    // BiasEstimate — поправка управления, а не гарантированная ошибка датчика.
-    BiasEstimate:=EnsureRange(BiasEstimate+BiasRate*dt,-BiasLimit,BiasLimit);
+    // AdaptiveAngleCorrection — экспериментальная поправка угла по состоянию обратной связи.
+    AdaptiveAngleCorrection:=EnsureRange(AdaptiveAngleCorrection+BiasRate*dt,-Parameters.BiasLimit,Parameters.BiasLimit);
   end;
 
   // Вычитаем поправку только при включённой коррекции.
   // Wrap возвращает угол в диапазон [-Pi; Pi]. Задержку здесь не компенсируем.
   CorrectedAngle:=MeasuredAngle;
-  if AngleCorrectionEnabled then CorrectedAngle:=CorrectedAngle-BiasEstimate;
+  if AngleCorrectionEnabled then CorrectedAngle:=CorrectedAngle-AdaptiveAngleCorrection;
   CorrectedAngle:=Wrap(CorrectedAngle);
 
   // I: накапливаем исправленную ошибку. Ограничиваем вклад в выход, рад/с.
   // При нулевой ошибке накопленное значение интегратора сохраняется.
-  Wint:=EnsureRange(Wint+Ki*CorrectedAngle*Dt,-IntegralLimit,IntegralLimit);
+  Wint:=EnsureRange(Wint+Parameters.Ki*CorrectedAngle*Dt,-Parameters.IntegralLimit,Parameters.IntegralLimit);
 
   // D: оцениваем скорость изменения исправленного угла, включая изменение поправки.
-  if First then Wdiff:=0
+  if First or (Parameters.Kd = 0) then Wdiff:=0
   else
   begin
     // Измерения поступают перед движением: их разделяет предыдущий шаг времени.
     // Wrap исключает ложный скачок на полный оборот при переходе через +/-Pi.
-    RawDerivative:=Kd*Wrap(CorrectedAngle-FPreviousError)/FPreviousDt;
+    RawDerivative:=Parameters.Kd*Wrap(CorrectedAngle-FPreviousError)/FPreviousDt;
 
     // Сглаживаем производную, уменьшая резкие реакции на задержанные измерения.
-    Wdiff:=Wdiff+(1-Exp(-dt/DerivativeFilterTime))*(RawDerivative-Wdiff);
+    if Parameters.DerivativeFilterTime = 0 then Wdiff:=RawDerivative
+    else Wdiff:=Wdiff+(1-Exp(-dt/Parameters.DerivativeFilterTime))*(RawDerivative-Wdiff);
   end;
 
   // P: немедленная реакция, пропорциональная исправленному углу.
-  Wprop:=Kp*CorrectedAngle;
+  Wprop:=Parameters.Kp*CorrectedAngle;
 
   // Складываем три вклада в рад/с. Общего ограничения выхода W сейчас нет.
   W:=Wprop+Wint+Wdiff;
