@@ -4,7 +4,7 @@ interface
 
 uses System.Classes, System.IniFiles, Vcl.Forms, Vcl.StdCtrls, Vcl.ComCtrls;
 
-const ParameterCount = 21;
+const ParameterCount = 22;
 type
   TParameterValues = array[0..ParameterCount - 1] of Double;
   TParametersForm = class(TForm)
@@ -57,7 +57,8 @@ const
     (Section: 'Controller'; Key: 'BiasErrorGateDegrees'; Caption: 'Порог угла (BiasErrorGate), °'; DefaultValue: BiasErrorGate * 180 / Pi; Minimum: 0; Maximum: 180; Page: 3),
     (Section: 'Controller'; Key: 'BiasRateLimitDegrees'; Caption: 'Скорость поправки (BiasRateLimit), °/с'; DefaultValue: BiasRateLimit * 180 / Pi; Minimum: 0; Maximum: 1E6; Page: 3),
     (Section: 'Controller'; Key: 'BiasLimitDegrees'; Caption: 'Предел поправки (BiasLimit), °'; DefaultValue: BiasLimit * 180 / Pi; Minimum: 0; Maximum: 180; Page: 3),
-    (Section: 'Controller'; Key: 'DerivativeFilterTime'; Caption: 'Время фильтра D (DerivativeFilterTime), с'; DefaultValue: DerivativeFilterTime; Minimum: 0; Maximum: 1E6; Page: 3)
+    (Section: 'Controller'; Key: 'DerivativeFilterTime'; Caption: 'Время фильтра D (DerivativeFilterTime), с'; DefaultValue: DerivativeFilterTime; Minimum: 0; Maximum: 1E6; Page: 3),
+    (Section: 'Simulation'; Key: 'AutoStopDistance'; Caption: 'Автоостановка при расстоянии меньше, м'; DefaultValue: 5; Minimum: 0; Maximum: 1E9; Page: 0)
   );
 
 // Проверяет диапазон числа и целочисленность длины задержки.

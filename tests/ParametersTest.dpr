@@ -17,6 +17,7 @@ begin
  try
   Application.Initialize;
   Defaults:=DefaultParameterValues;
+  Near(Defaults[21],5,'Default auto stop distance');
   Near(Defaults[5],3,'Default delay'); Near(Defaults[6],-20,'Default sensor bias');
   Near(Defaults[7],50,'Default point speed'); Near(Defaults[8],-10,'Default point heading');
   Near(Defaults[11],0.5,'Default Kd'); Near(Defaults[12],10,'Default integral limit');

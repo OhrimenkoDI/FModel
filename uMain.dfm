@@ -72,6 +72,17 @@ object Form2: TForm2
       TabOrder = 4
       OnClick = AngleCorrectionCheckBoxClick
     end
+    object AutoStopCheckBox: TCheckBox
+      Left = 875
+      Top = 45
+      Width = 210
+      Height = 20
+      Caption = #1040#1074#1090#1086#1086#1089#1090#1072#1085#1086#1074#1082#1072' '#1088#1072#1089#1095#1105#1090#1072
+      Checked = True
+      State = cbChecked
+      TabOrder = 5
+      OnClick = AutoStopCheckBoxClick
+    end
     object OffsetMinusButton: TButton
       Left = 8
       Top = 40

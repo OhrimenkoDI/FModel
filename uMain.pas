@@ -42,12 +42,14 @@ type
     OffsetLabel: TLabel;
     ResultLabel: TLabel;
     AngleCorrectionCheckBox: TCheckBox;
+    AutoStopCheckBox: TCheckBox;
     IntegratorTimer: TTimer;
     HistoryPanel: TPanel;
     HistoryLabel: TLabel;
     HistorySlider: TTrackBar;
     procedure HistorySliderChange(Sender: TObject);
     procedure AngleCorrectionCheckBoxClick(Sender: TObject);
+    procedure AutoStopCheckBoxClick(Sender: TObject);
     procedure OffsetMinusButtonClick(Sender: TObject);
     procedure OffsetPlusButtonClick(Sender: TObject);
     procedure InitButtonClick(Sender: TObject);
@@ -67,6 +69,8 @@ type
   private
     FReady: Boolean;
     FStoppedOnDistance: Boolean;
+    FAutoStopEnabled: Boolean;
+    FAutoStopDistance: Double;
     FMinimumDistance: Double;
     FModel: TMotionModel;
     FController: TAdaptiveRegulator;
@@ -120,6 +124,8 @@ type
     property ReferencePointX: Double read GetReferencePointX;
     property ReferencePointY: Double read GetReferencePointY;
     property TrajectoryCount: Integer read FTrajectoryCount;
+    property AutoStopDistance: Double read FAutoStopDistance;
+    property AutoStopEnabled: Boolean read FAutoStopEnabled;
     property MinimumDistance: Double read FMinimumDistance;
   end;
 
@@ -156,6 +162,7 @@ begin
   FController.Init;
   LoadSettings;
   AngleCorrectionCheckBox.Checked := FController.AngleCorrectionEnabled;
+  AutoStopCheckBox.Checked := FAutoStopEnabled;
   FReady := True;
   InitButtonClick(nil);
 end;
@@ -301,6 +308,14 @@ begin
   SaveSettings;
 end;
 
+// Включает или отключает автоостановку без сброса текущего расчёта.
+procedure TForm2.AutoStopCheckBoxClick(Sender: TObject);
+begin
+  if not FReady then Exit;
+  FAutoStopEnabled := AutoStopCheckBox.Checked;
+  SaveSettings;
+end;
+
 // Увеличивает смещение датчика на один градус.
 procedure TForm2.OffsetPlusButtonClick(Sender: TObject);
 begin
@@ -412,9 +427,12 @@ begin
   if IsNan(dt) or IsInfinite(dt) or (dt < 0) then
     raise EArgumentException.Create('dt must be finite and non-negative');
   if dt = 0 then Exit;
+
   // Связь модулей только здесь: измерение -> регулятор -> команда -> движение.
   FModel.W := FController.Update(dt, FModel.MeasureAngle, FModel.W);
+
   FModel.Integrate(dt);
+
   FHistoryIndex := -1;
   FLastDt := dt;
   Inc(FStepCount);
@@ -422,7 +440,9 @@ begin
   FSimulationTime := FSimulationTime + dt;
   DistanceAfter := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
   FMinimumDistance := Min(FMinimumDistance, Min(DistanceBefore, DistanceAfter));
-  if IntegratorTimer.Enabled and (DistanceAfter > DistanceBefore + 1E-9) then
+  if FAutoStopEnabled and IntegratorTimer.Enabled and
+    (DistanceAfter < FAutoStopDistance) and
+    (DistanceAfter > DistanceBefore + 1E-9) then
   begin
     StopProcess;
     FStoppedOnDistance := True;
@@ -572,6 +592,7 @@ begin
   Result[18] := RadToDeg(FController.Parameters.BiasRateLimit);
   Result[19] := RadToDeg(FController.Parameters.BiasLimit);
   Result[20] := FController.Parameters.DerivativeFilterTime;
+  Result[21] := FAutoStopDistance;
 end;
 
 // Передаёт проверенные настройки их владельцам, не связывая модель с регулятором.
@@ -598,6 +619,7 @@ begin
   FController.Parameters.BiasRateLimit := DegToRad(Values[18]);
   FController.Parameters.BiasLimit := DegToRad(Values[19]);
   FController.Parameters.DerivativeFilterTime := Values[20];
+  FAutoStopDistance := Values[21];
   FMuXYZ[1] := FMuXYZ[0];
 end;
 
@@ -611,6 +633,7 @@ begin
     ReadParameterValues(Ini, Values);
     ApplyParameterValues(Values);
     FController.AngleCorrectionEnabled := Ini.ReadBool('Controller', 'AngleCorrection', True);
+    FAutoStopEnabled := Ini.ReadBool('Simulation', 'AutoStopEnabled', True);
     FOriginX := Ini.ReadInteger('View', 'OriginX', FOriginX);
     FOriginY := Ini.ReadInteger('View', 'OriginY', FOriginY);
   finally Ini.Free; end;
@@ -626,6 +649,7 @@ begin
     Ini.DeleteKey('Controller', 'DelayCorrection');
     Ini.DeleteKey('Sensor', 'HeadingOffsetEnabled');
     Ini.WriteBool('Controller', 'AngleCorrection', FController.AngleCorrectionEnabled);
+    Ini.WriteBool('Simulation', 'AutoStopEnabled', FAutoStopEnabled);
     Ini.WriteInteger('View', 'OriginX', FOriginX);
     Ini.WriteInteger('View', 'OriginY', FOriginY);
     Ini.EraseSection('Target');
