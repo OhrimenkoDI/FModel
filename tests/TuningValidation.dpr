@@ -3,7 +3,7 @@ program TuningValidation;
 uses
   System.SysUtils, System.Math,
   uMotionModel in '..\uMotionModel.pas',
-  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uPID in '..\uPID.pas';
 const
   ReferencePoints: array[0..1, 0..1] of Double =
     ((94.6605734183323, 36.4706067517867), (100, 100));
@@ -14,7 +14,7 @@ const
      (0.011, 0.017, 0.013, 0.019));
 var
   M: TMotionModel;
-  Controller: TAdaptiveRegulator;
+  Controller: TPIDState;
   T, S, I: Integer;
   BeforeDistance, Distance, Nearest: Double;
   Stopped: Boolean;
@@ -25,7 +25,7 @@ begin
       begin
         M.Init;
         M.ReferencePoint.V := 0; // Сравнение с исходными сценариями настройки.
-        Controller.Init;
+        PIDinit(Controller);
         M.ReferencePoint.X := ReferencePoints[T, 0];
         M.ReferencePoint.Y := ReferencePoints[T, 1];
         Distance := Hypot(M.ReferencePoint.X, M.ReferencePoint.Y);
@@ -34,7 +34,7 @@ begin
         for I := 0 to 1999 do
         begin
           BeforeDistance := Distance;
-          M.W := Controller.Update(Steps[S, I mod 4], M.MeasureAngle, M.W);
+          M.W := DegToRad(PIDupdate(Controller, Steps[S, I mod 4], RadToDeg(M.MeasureAngle), RadToDeg(M.W)));
           M.Integrate(Steps[S, I mod 4]);
           Distance := Hypot(M.ReferencePoint.X - M.X, M.ReferencePoint.Y - M.Y);
           Nearest := Min(Nearest, Distance);

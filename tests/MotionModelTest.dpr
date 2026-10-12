@@ -3,7 +3,7 @@
 uses System.SysUtils, System.Math, Vcl.Forms,
   uMain in '..\uMain.pas',
   uMotionModel in '..\uMotionModel.pas',
-  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uPID in '..\uPID.pas';
 // Проверяет совпадение значений с допустимой погрешностью.
 procedure Near(A,B: Double; const S: string);
 begin
@@ -11,7 +11,7 @@ begin
 end;
 var
   M: TMotionModel;
-  C: TAdaptiveRegulator;
+  C: TPIDState;
   F: TForm2;
   I,Config: Integer;
   Dt,FirstAngle: Double;
@@ -43,14 +43,14 @@ begin
         begin
           Dt:=0.007+(I mod 3)*0.001;
           // Независимая последовательность: измерение, регулятор, движение.
-          M.W:=C.Update(Dt,M.MeasureAngle,M.W);
+          M.W:=DegToRad(PIDupdate(C, Dt,RadToDeg(M.MeasureAngle),RadToDeg(M.W)));
           M.Integrate(Dt);
           F.Integrate(Dt);
           Near(F.Model.X,M.X,'Main integration order X');
           Near(F.Model.Y,M.Y,'Main integration order Y');
           Near(F.Model.ReferencePoint.X,M.ReferencePoint.X,'Reference integration order X');
           Near(F.Model.ReferencePoint.Y,M.ReferencePoint.Y,'Reference integration order Y');
-          Near(F.Model.W,C.W,'Command transmission');
+          Near(RadToDeg(F.Model.W),C.W,'Command transmission');
           Near(F.Controller.Wint,C.Wint,'Controller state mismatch');
           Near(F.Controller.AdaptiveAngleCorrection,C.AdaptiveAngleCorrection,'Bias state mismatch');
         end;

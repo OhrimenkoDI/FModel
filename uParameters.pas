@@ -27,7 +27,7 @@ function EditParameters(var Values: TParameterValues): Boolean;
 implementation
 
 uses System.SysUtils, System.Math, System.StrUtils, Vcl.Controls, Vcl.ExtCtrls, Vcl.Dialogs,
-  System.UITypes, uMotionModel, uAdaptiveRegulator;
+  System.UITypes, uMotionModel, uPID;
 
 type
   TParameterDefinition = record
@@ -49,14 +49,14 @@ const
     (Section: 'Controller'; Key: 'Kp'; Caption: 'Пропорциональный коэффициент Kp'; DefaultValue: Kp; Minimum: 0; Maximum: 1E6; Page: 2),
     (Section: 'Controller'; Key: 'Ki'; Caption: 'Интегральный коэффициент Ki'; DefaultValue: Ki; Minimum: 0; Maximum: 1E6; Page: 2),
     (Section: 'Controller'; Key: 'Kd'; Caption: 'Дифференциальный коэффициент Kd'; DefaultValue: Kd; Minimum: 0; Maximum: 1E6; Page: 2),
-    (Section: 'Controller'; Key: 'IntegralLimit'; Caption: 'Предел I (IntegralLimit), рад/с'; DefaultValue: IntegralLimit; Minimum: 0; Maximum: 1E6; Page: 2),
+    (Section: 'Controller'; Key: 'IntegralLimitDegreesPerSecond'; Caption: 'Предел I (IntegralLimit), °/с'; DefaultValue: IntegralLimit; Minimum: 0; Maximum: 1E6; Page: 2),
     (Section: 'Controller'; Key: 'BiasAdaptationGain'; Caption: 'Коэффициент адаптации (BiasAdaptationGain)'; DefaultValue: BiasAdaptationGain; Minimum: 0; Maximum: 1E6; Page: 3),
     (Section: 'Controller'; Key: 'BiasAngularSpeedWeight'; Caption: 'Вес W (BiasAngularSpeedWeight)'; DefaultValue: BiasAngularSpeedWeight; Minimum: 0; Maximum: 1E6; Page: 3),
     (Section: 'Controller'; Key: 'BiasAdaptationStart'; Caption: 'Начало адаптации (BiasAdaptationStart), с'; DefaultValue: BiasAdaptationStart; Minimum: 0; Maximum: 1E6; Page: 3),
     (Section: 'Controller'; Key: 'BiasFilterTime'; Caption: 'Время фильтра адаптации (BiasFilterTime), с'; DefaultValue: BiasFilterTime; Minimum: 0; Maximum: 1E6; Page: 3),
-    (Section: 'Controller'; Key: 'BiasErrorGateDegrees'; Caption: 'Порог угла (BiasErrorGate), °'; DefaultValue: BiasErrorGate * 180 / Pi; Minimum: 0; Maximum: 180; Page: 3),
-    (Section: 'Controller'; Key: 'BiasRateLimitDegrees'; Caption: 'Скорость поправки (BiasRateLimit), °/с'; DefaultValue: BiasRateLimit * 180 / Pi; Minimum: 0; Maximum: 1E6; Page: 3),
-    (Section: 'Controller'; Key: 'BiasLimitDegrees'; Caption: 'Предел поправки (BiasLimit), °'; DefaultValue: BiasLimit * 180 / Pi; Minimum: 0; Maximum: 180; Page: 3),
+    (Section: 'Controller'; Key: 'BiasErrorGateDegrees'; Caption: 'Порог угла (BiasErrorGate), °'; DefaultValue: BiasErrorGate; Minimum: 0; Maximum: 180; Page: 3),
+    (Section: 'Controller'; Key: 'BiasRateLimitDegrees'; Caption: 'Скорость поправки (BiasRateLimit), °/с'; DefaultValue: BiasRateLimit; Minimum: 0; Maximum: 1E6; Page: 3),
+    (Section: 'Controller'; Key: 'BiasLimitDegrees'; Caption: 'Предел поправки (BiasLimit), °'; DefaultValue: BiasLimit; Minimum: 0; Maximum: 180; Page: 3),
     (Section: 'Controller'; Key: 'DerivativeFilterTime'; Caption: 'Время фильтра D (DerivativeFilterTime), с'; DefaultValue: DerivativeFilterTime; Minimum: 0; Maximum: 1E6; Page: 3),
     (Section: 'Simulation'; Key: 'AutoStopDistance'; Caption: 'Автоостановка при расстоянии меньше, м'; DefaultValue: 5; Minimum: 0; Maximum: 1E9; Page: 0)
   );
@@ -86,7 +86,16 @@ begin
     Section := Definitions[I].Section;
     if (Section = 'ReferencePoint') and not Ini.SectionExists(Section) and Ini.SectionExists('Target') then
       Section := 'Target';
-    if TryStrToFloat(Ini.ReadString(Section, Definitions[I].Key, ''), V, TFormatSettings.Invariant) then
+    // Прежний IntegralLimit хранился в рад/с. Новый ключ исключает повторный пересчёт.
+    if (I = 12) and not Ini.ValueExists(Section, Definitions[I].Key) then
+    begin
+      if TryStrToFloat(Ini.ReadString(Section, 'IntegralLimit', ''), V, TFormatSettings.Invariant) then
+      begin
+        V := RadToDeg(V);
+        if ValidValue(I, V) then Values[I] := V;
+      end;
+    end
+    else if TryStrToFloat(Ini.ReadString(Section, Definitions[I].Key, ''), V, TFormatSettings.Invariant) then
       if ValidValue(I, V) then Values[I] := V;
   end;
 end;
@@ -98,6 +107,7 @@ begin
   for I := 0 to High(Values) do
     Ini.WriteString(Definitions[I].Section, Definitions[I].Key,
       FloatToStr(Values[I], TFormatSettings.Invariant));
+  Ini.DeleteKey('Controller', 'IntegralLimit');
 end;
 
 // Создаёт окно с вкладками и отдельной кнопкой возврата к исходным значениям.

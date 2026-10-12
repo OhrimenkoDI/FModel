@@ -4,7 +4,7 @@ uses
   Vcl.Forms,
   uMain in 'uMain.pas' {Form2},
   uMotionModel in 'uMotionModel.pas',
-  uAdaptiveRegulator in 'uAdaptiveRegulator.pas',
+  uPID in 'uPID.pas',
   uParameters in 'uParameters.pas';
 
 {$R *.res}

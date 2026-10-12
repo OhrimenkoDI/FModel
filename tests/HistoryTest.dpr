@@ -3,7 +3,7 @@ program HistoryTest;
 uses
   System.SysUtils, System.Math, Vcl.Forms, Vcl.Graphics, Vcl.Imaging.pngimage,
   uMain in '..\uMain.pas', uMotionModel in '..\uMotionModel.pas',
-  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uPID in '..\uPID.pas';
 // Завершает проверку с ошибкой, если условие не выполнено.
 procedure Check(B: Boolean; const S: string);
 begin
@@ -35,14 +35,14 @@ begin
       Near(A.Time,0.105,'First retained time');
       Near(B.Time,1.1,'Last retained time');
       Near(A.Model.ReferencePoint.X,A.Model.ReferencePoint.InitialX +
-        A.Model.ReferencePoint.V*Cos(A.Model.ReferencePoint.Fi + 3*deg)*A.Time,'Historical reference X');
+        A.Model.ReferencePoint.V*Cos(A.Model.ReferencePoint.Fi)*A.Time,'Historical reference X');
       Near(B.Model.ReferencePoint.Y,B.Model.ReferencePoint.InitialY +
-        B.Model.ReferencePoint.V*Sin(B.Model.ReferencePoint.Fi + 3*deg)*B.Time,'Historical reference Y');
+        B.Model.ReferencePoint.V*Sin(B.Model.ReferencePoint.Fi)*B.Time,'Historical reference Y');
       Check((A.TrajectoryCount=21) and (B.TrajectoryCount=220),'Historical trajectory');
       for I:=0 to 199 do
       begin
         Displayed:=F.HistoryFrame(I);
-        Near(Displayed.Model.W,Displayed.Controller.Wprop+Displayed.Controller.Wint+
+        Near(RadToDeg(Displayed.Model.W),Displayed.Controller.Wprop+Displayed.Controller.Wint+
           Displayed.Controller.Wdiff,'PID terms sum');
         Near(Displayed.Controller.Wprop,Kp*Displayed.Controller.CorrectedAngle,'Proportional term');
       end;

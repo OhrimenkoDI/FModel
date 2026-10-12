@@ -3,7 +3,7 @@
 uses System.SysUtils, System.Classes, System.Math, System.IniFiles,
   Vcl.Forms, Vcl.ComCtrls, Vcl.StdCtrls, Vcl.Graphics, Vcl.Imaging.pngimage,
   uParameters in '..\uParameters.pas', uMain in '..\uMain.pas',
-  uMotionModel in '..\uMotionModel.pas', uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uMotionModel in '..\uMotionModel.pas', uPID in '..\uPID.pas';
 // Проверяет условие и сообщает причину отказа.
 procedure Check(B: Boolean; const S: string);
 begin if not B then raise Exception.Create(S); end;
@@ -11,7 +11,7 @@ begin if not B then raise Exception.Create(S); end;
 procedure Near(A,B: Double; const S: string);
 begin Check(Abs(A-B)<1E-9,S); end;
 var Values, Loaded, Defaults: TParameterValues; Ini: TMemIniFile; Name: string;
-  D: TParametersForm; F: TForm2; M, Snapshot: TMotionModel; C: TAdaptiveRegulator;
+  D: TParametersForm; F: TForm2; M, Snapshot: TMotionModel; C: TPIDState;
   I, Bad: Integer; Action: TCloseAction; Bitmap: TBitmap; Png: TPngImage;
 begin
  try
@@ -20,7 +20,7 @@ begin
   Near(Defaults[21],5,'Default auto stop distance');
   Near(Defaults[5],3,'Default delay'); Near(Defaults[6],-20,'Default sensor bias');
   Near(Defaults[7],50,'Default point speed'); Near(Defaults[8],-10,'Default point heading');
-  Near(Defaults[11],0.5,'Default Kd'); Near(Defaults[12],10,'Default integral limit');
+  Near(Defaults[11],0.5,'Default Kd'); Near(Defaults[12],10 * 180 / Pi,'Default integral limit');
   D:=TParametersForm.Create(nil);
   try
    D.SetValues(Defaults);
@@ -67,9 +67,9 @@ begin
    Near(F.Controller.Parameters.BiasAngularSpeedWeight,Values[14],'W weight');
    Near(F.Controller.Parameters.BiasAdaptationStart,Values[15],'Adaptation start');
    Near(F.Controller.Parameters.BiasFilterTime,Values[16],'Bias filter');
-   Near(RadToDeg(F.Controller.Parameters.BiasErrorGate),Values[17],'Gate conversion');
-   Near(RadToDeg(F.Controller.Parameters.BiasRateLimit),Values[18],'Rate conversion');
-   Near(RadToDeg(F.Controller.Parameters.BiasLimit),Values[19],'Limit conversion');
+   Near(F.Controller.Parameters.BiasErrorGate,Values[17],'Gate conversion');
+   Near(F.Controller.Parameters.BiasRateLimit,Values[18],'Rate conversion');
+   Near(F.Controller.Parameters.BiasLimit,Values[19],'Limit conversion');
    Near(F.Controller.Parameters.DerivativeFilterTime,Values[20],'D filter');
    F.Integrate(0.01); F.InitButtonClick(nil);
    Near(F.Controller.Parameters.Kd,Values[11],'Init reset parameters');
@@ -87,6 +87,17 @@ begin
    Near(Loaded[5],Defaults[5],'Invalid delay fallback');
    Near(Loaded[16],Defaults[16],'Invalid filter fallback');
   finally Ini.Free; end;
+  Ini:=TMemIniFile.Create(Name);
+  try
+   Ini.DeleteKey('Controller','IntegralLimitDegreesPerSecond');
+   Ini.WriteString('Controller','IntegralLimit','2.5');
+   Loaded:=Defaults; ReadParameterValues(Ini,Loaded);
+   Near(Loaded[12],2.5 * 180 / Pi,'Legacy radian limit migration');
+   WriteParameterValues(Ini,Loaded);
+   Check(not Ini.ValueExists('Controller','IntegralLimit'),'Legacy limit key retained');
+   Values:=Defaults; ReadParameterValues(Ini,Values);
+   Near(Values[12],2.5 * 180 / Pi,'Limit converted twice');
+  finally Ini.Free; end;
   DeleteFile(Name);
   M.Init; M.AngleCount:=0;
   Near(M.MeasureAngle,DegToRad(45+DefaultSensorBiasDegrees),'Zero delay');
@@ -94,12 +105,12 @@ begin
   Near(M.MeasureAngle,0,'Delay slot 1'); Near(M.MeasureAngle,0,'Delay slot 2');
   Near(M.MeasureAngle,DegToRad(45+DefaultSensorBiasDegrees),'Delayed sample');
   Near(Snapshot.MeasureAngle,0,'Snapshot ring mutated');
-  C.Init; C.Parameters.Ki:=0; C.Parameters.Kd:=0;
+  PIDinit(C); C.Parameters.Ki:=0; C.Parameters.Kd:=0;
   C.Parameters.BiasFilterTime:=0; C.Parameters.DerivativeFilterTime:=0;
-  C.Wint:=3; C.Wdiff:=4; C.Update(0.01,0.1,0);
+  C.Wint:=3; C.Wdiff:=4; PIDupdate(C, 0.01,0.1,0);
   Near(C.Wint,0,'Disabled I retained'); Near(C.Wdiff,0,'Disabled D retained');
   Near(C.W,C.Parameters.Kp*0.1,'P only output');
-  C.Reset; Near(C.Parameters.Ki,0,'Regulator reset parameters');
+  PIDreset(C); Near(C.Parameters.Ki,0,'Regulator reset parameters');
   Writeln('PASS: defaults, validation, UI reset, all settings INI round trip, init, delay 0/2, snapshots, zero I/D');
  except on E: Exception do begin Writeln(E.Message); ExitCode:=1; end; end;
 end.

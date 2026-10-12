@@ -128,7 +128,7 @@
             <FormType>dfm</FormType>
         </DCCReference>
         <DCCReference Include="uMotionModel.pas"/>
-        <DCCReference Include="uAdaptiveRegulator.pas"/>
+        <DCCReference Include="uPID.pas"/>
         <DCCReference Include="uParameters.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

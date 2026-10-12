@@ -6,7 +6,7 @@ uses
   System.SysUtils, System.Classes, System.IniFiles, Vcl.Forms, Vcl.Controls, Vcl.Graphics,
   uMain in '..\uMain.pas',
   uMotionModel in '..\uMotionModel.pas',
-  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uPID in '..\uPID.pas';
 
 // Завершает проверку с ошибкой, если условие не выполнено.
 procedure Check(Value: Boolean; const MessageText: string);

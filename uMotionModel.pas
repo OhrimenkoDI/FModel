@@ -79,8 +79,8 @@ begin
   if IsNan(dt) or IsInfinite(dt) or (dt < 0) then
     raise EArgumentException.Create('dt must be finite and non-negative');
   if dt = 0 then Exit;
-  X := X + V * Cos(Fi+3*deg) * dt;
-  Y := Y + V * Sin(Fi+3*deg) * dt;
+  X := X + V * Cos(Fi) * dt;
+  Y := Y + V * Sin(Fi) * dt;
 end;
 
 // Инициализирует модель, опорную точку и параметры датчика.
@@ -164,8 +164,8 @@ begin
     raise EArgumentException.Create('dt must be finite and non-negative');
   if dt = 0 then Exit;
   Fi := Fi + dt * W;
-  X := X + V * Cos(Fi) * dt;
-  Y := Y + V * Sin(Fi) * dt;
+  X := X + V * Cos(Fi-10*deg) * dt;
+  Y := Y + V * Sin(Fi-10*deg) * dt;
   ReferencePoint.Integrate(dt);
 end;
 

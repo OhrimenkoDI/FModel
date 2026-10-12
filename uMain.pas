@@ -6,7 +6,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Math, Vcl.Graphics,
   Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus, System.UITypes,
   System.IniFiles, Vcl.StdCtrls, Vcl.ComCtrls, Winapi.MMSystem, uMotionModel,
-  uAdaptiveRegulator, uParameters;
+  uPID, uParameters;
 
 const
   MeasurementHistorySize = 200;
@@ -20,7 +20,7 @@ type
   TTrajectoryBuffer = array[0..TrajectoryCapacity-1] of TTrajectoryPoint;
   TSimulationFrame = record
     Model: TMotionModel;
-    Controller: TAdaptiveRegulator;
+    Controller: TPIDState;
     Time, Dt, MinimumDistance: Double;
     Step: Int64;
     StoppedOnDistance: Boolean;
@@ -73,7 +73,7 @@ type
     FAutoStopDistance: Double;
     FMinimumDistance: Double;
     FModel: TMotionModel;
-    FController: TAdaptiveRegulator;
+    FController: TPIDState;
     FTrajectory: TTrajectoryBuffer;
     FHistory: array[0..MeasurementHistorySize-1] of TSimulationFrame;
     FHistoryNext, FHistoryCount, FHistoryIndex: Integer;
@@ -120,7 +120,7 @@ type
     property LastDt: Double read FLastDt;
     property StepCount: Int64 read FStepCount;
     property Model: TMotionModel read FModel;
-    property Controller: TAdaptiveRegulator read FController;
+    property Controller: TPIDState read FController;
     property ReferencePointX: Double read GetReferencePointX;
     property ReferencePointY: Double read GetReferencePointY;
     property TrajectoryCount: Integer read FTrajectoryCount;
@@ -159,7 +159,7 @@ begin
   FOriginX := Image1.Width div 2;
   FOriginY := Image1.Height div 2;
   FModel.Init;
-  FController.Init;
+  PIDinit(FController);
   LoadSettings;
   AngleCorrectionCheckBox.Checked := FController.AngleCorrectionEnabled;
   AutoStopCheckBox.Checked := FAutoStopEnabled;
@@ -332,7 +332,7 @@ begin
   FHistoryNext := 0;
   FHistoryIndex := -1;
   FModel.ResetMotion;
-  FController.Reset;
+  PIDreset(FController);
   FController.AngleCorrectionEnabled := AngleCorrectionCheckBox.Checked;
   FMinimumDistance := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
   FStoppedOnDistance := False;
@@ -429,7 +429,8 @@ begin
   if dt = 0 then Exit;
 
   // Связь модулей только здесь: измерение -> регулятор -> команда -> движение.
-  FModel.W := FController.Update(dt, FModel.MeasureAngle, FModel.W);
+  // Модель хранит радианы, регулятор принимает и возвращает градусы.
+  FModel.W := DegToRad(PIDupdate(FController, dt, RadToDeg(FModel.MeasureAngle), RadToDeg(FModel.W)));
 
   FModel.Integrate(dt);
 
@@ -588,9 +589,9 @@ begin
   Result[14] := FController.Parameters.BiasAngularSpeedWeight;
   Result[15] := FController.Parameters.BiasAdaptationStart;
   Result[16] := FController.Parameters.BiasFilterTime;
-  Result[17] := RadToDeg(FController.Parameters.BiasErrorGate);
-  Result[18] := RadToDeg(FController.Parameters.BiasRateLimit);
-  Result[19] := RadToDeg(FController.Parameters.BiasLimit);
+  Result[17] := FController.Parameters.BiasErrorGate;
+  Result[18] := FController.Parameters.BiasRateLimit;
+  Result[19] := FController.Parameters.BiasLimit;
   Result[20] := FController.Parameters.DerivativeFilterTime;
   Result[21] := FAutoStopDistance;
 end;
@@ -615,9 +616,9 @@ begin
   FController.Parameters.BiasAngularSpeedWeight := Values[14];
   FController.Parameters.BiasAdaptationStart := Values[15];
   FController.Parameters.BiasFilterTime := Values[16];
-  FController.Parameters.BiasErrorGate := DegToRad(Values[17]);
-  FController.Parameters.BiasRateLimit := DegToRad(Values[18]);
-  FController.Parameters.BiasLimit := DegToRad(Values[19]);
+  FController.Parameters.BiasErrorGate := Values[17];
+  FController.Parameters.BiasRateLimit := Values[18];
+  FController.Parameters.BiasLimit := Values[19];
   FController.Parameters.DerivativeFilterTime := Values[20];
   FAutoStopDistance := Values[21];
   FMuXYZ[1] := FMuXYZ[0];
@@ -891,8 +892,8 @@ begin
     [FMuXYZ[0], Frame.Model.Diameter, Frame.Model.ReferencePoint.Diameter]);
   InfoLines[1] := Format('Область: %.2f x %.2f м; сетка: %g м',
     [W / FMuXYZ[0], H / FMuXYZ[1], GridStep]);
-  InfoLines[2] := Format('X = %.2f м; Y = %.2f м; Fi = %.3f рад; V = %.1f км/ч',
-    [Frame.Model.X, Frame.Model.Y, Frame.Model.Fi, Frame.Model.V / KmhToMetresPerSecond]);
+  InfoLines[2] := Format('X = %.2f м; Y = %.2f м; Fi = %.3f°; V = %.1f км/ч',
+    [Frame.Model.X, Frame.Model.Y, RadToDeg(Frame.Model.Fi), Frame.Model.V / KmhToMetresPerSecond]);
   InfoLines[3] := Format('Опорная точка: X = %.2f м; Y = %.2f м; Fi = %.1f°; V = %.1f км/ч',
     [Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y,
      RadToDeg(Frame.Model.ReferencePoint.Fi), Frame.Model.ReferencePoint.V / KmhToMetresPerSecond]);
@@ -903,16 +904,16 @@ begin
   InfoLines[5] := 'Задержка: не оценивается';
   if Frame.Controller.AngleCorrectionEnabled then
     InfoLines[6] := Format('Поправка измерения: %.2f°',
-      [RadToDeg(Frame.Controller.AdaptiveAngleCorrection)])
+      [Frame.Controller.AdaptiveAngleCorrection])
   else
     InfoLines[6] := 'Поправка измерения: отключена';
   InfoLines[7] := Format('Измеренный угол после коррекции: %.2f°',
-    [RadToDeg(Frame.Controller.CorrectedAngle)]);
+    [Frame.Controller.CorrectedAngle]);
   InfoLines[8] := Format('Измеренный угол: %.4f°', [RadToDeg(Frame.Model.MeasuredAngle)]);
-  InfoLines[9] := Format('P = %.6f; I = %.6f; D = %.6f рад/с',
+  InfoLines[9] := Format('P = %.6f; I = %.6f; D = %.6f °/с',
     [Frame.Controller.Wprop, Frame.Controller.Wint, Frame.Controller.Wdiff]);
-  InfoLines[10] := Format('Выход регулятора W = %.6f рад/с', [Frame.Controller.W]);
-  InfoLines[11] := Format('Входная угловая скорость W = %.6f рад/с', [Frame.Controller.InputW]);
+  InfoLines[10] := Format('Выход регулятора W = %.6f °/с', [Frame.Controller.W]);
+  InfoLines[11] := Format('Входная угловая скорость W = %.6f °/с', [Frame.Controller.InputW]);
   with Image1.Picture.Bitmap.Canvas do
   begin
     Font.Color := clBlack;

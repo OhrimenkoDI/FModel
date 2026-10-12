@@ -3,7 +3,7 @@
 uses
   System.SysUtils, System.Types, System.IniFiles, Vcl.Forms,
   uMain in '..\uMain.pas', uMotionModel in '..\uMotionModel.pas',
-  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uPID in '..\uPID.pas';
 var
   F: TForm2;
   Ini: TMemIniFile;

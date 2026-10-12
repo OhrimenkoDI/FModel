@@ -3,7 +3,7 @@
 uses
   Winapi.Windows, System.SysUtils, System.Math, System.IniFiles, Vcl.Forms,
   uMain in '..\uMain.pas', uMotionModel in '..\uMotionModel.pas',
-  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uPID in '..\uPID.pas';
 // Проверяет порог на заведомо растущем расстоянии без влияния регулятора.
 procedure CheckThreshold(StartX, Limit, Dt: Double; ShouldStop: Boolean);
 var F: TForm2; Ini: TMemIniFile; Name: string;

@@ -3,7 +3,7 @@ program ReferencePointTest;
 uses
   System.SysUtils, System.Math, System.Classes, System.IniFiles, Vcl.Forms, Vcl.Controls,
   uMain in '..\uMain.pas', uMotionModel in '..\uMotionModel.pas',
-  uAdaptiveRegulator in '..\uAdaptiveRegulator.pas';
+  uPID in '..\uPID.pas';
 // Завершает проверку с ошибкой, если условие не выполнено.
 procedure Check(B: Boolean; const S: string);
 begin
