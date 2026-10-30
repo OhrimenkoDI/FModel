@@ -2,6 +2,8 @@
 
 interface
 
+uses uRecordedPlant;
+
 const
   FAngleCount = 3; // Задержка по умолчанию, число измерений.
   MaxSensorDelaySamples = 1000;
@@ -27,8 +29,11 @@ type
     FAngleNext: Integer;
 
   public
+    RecordedPlant: TRecordedPlant;
+    Course: Double; // Degrees, used only by recorded profile.
     X, Y: Double; // Position in metres.
     Diameter: Double; // Metres; preserved by ResetMotion.
+    SpeedKmh, InitialHeadingDegrees: Double;
     Fi: Double;   // Heading in radians, counterclockwise from +X towards +Y.
     V: Double;    // Speed in metres per second.
     W: Double;    // Angular velocity in radians per second.
@@ -39,6 +44,8 @@ type
     procedure Init;
     procedure ResetMotion;
     function MeasureAngle: Double;
+    function GyroDegrees: Double;
+    procedure ApplyControl(CommandDegrees, Dt: Double);
     procedure Integrate(dt: Double);
     function TryAngleToPoint(ReferencePointX, ReferencePointY: Double; out Degrees: Double): Boolean;
   end;
@@ -86,8 +93,11 @@ end;
 // Инициализирует модель, опорную точку и параметры датчика.
 procedure TMotionModel.Init;
 begin
+  RecordedPlant.Parameters := DefaultRecordedPlantParameters;
   Diameter := 1;
   ReferencePoint.Init;
+  SpeedKmh := DefaultSpeedKmh;
+  InitialHeadingDegrees := 0;
   SensorBiasDegrees := DefaultSensorBiasDegrees;
   AngleCount := FAngleCount;
   ResetMotion;
@@ -96,14 +106,16 @@ end;
 // Сбрасывает движение и буфер датчика, сохраняя настройки модели.
 procedure TMotionModel.ResetMotion;
 begin
+  RecordedPlant.Reset;
+  Course := InitialHeadingDegrees;
   X := 0;
   Y := 0;
-  Fi := 0;
+  Fi := DegToRad(InitialHeadingDegrees);
   W := 0;
   MeasuredAngle := 0;
   FillChar(FAngleHistory, SizeOf(FAngleHistory), 0);
   FAngleNext := 0;
-  V := DefaultSpeedKmh * KmhToMetresPerSecond;
+  V := SpeedKmh * KmhToMetresPerSecond;
   ReferencePoint.ResetMotion;
 end;
 
@@ -144,6 +156,11 @@ begin
   if (AngleCount < 0) or (AngleCount > MaxSensorDelaySamples) then
     raise EArgumentOutOfRangeException.Create('Sensor delay sample count');
   TryAngleToPoint(ReferencePoint.X, ReferencePoint.Y, AngleDegrees);
+  if RecordedPlant.Enabled then
+  begin
+    MeasuredAngle := DegToRad(RecordedPlant.Observe(AngleDegrees));
+    Exit(MeasuredAngle);
+  end;
   if AngleCount = 0 then
   begin
     MeasuredAngle := WrapAngle(DegToRad(AngleDegrees + SensorBiasDegrees));
@@ -157,6 +174,20 @@ begin
   Result := MeasuredAngle;
 end;
 
+function TMotionModel.GyroDegrees: Double;
+begin
+  if RecordedPlant.Enabled then Result := RecordedPlant.GyroRate
+  else Result := RadToDeg(W);
+end;
+
+procedure TMotionModel.ApplyControl(CommandDegrees, Dt: Double);
+begin
+  if Dt = 0 then Exit;
+  if RecordedPlant.Enabled then W := DegToRad(RecordedPlant.Advance(CommandDegrees, Dt))
+  else W := DegToRad(CommandDegrees);
+  Integrate(Dt);
+end;
+
 // Перемещает обе точки за один dt; W управляет только основной моделью.
 procedure TMotionModel.Integrate(dt: Double);
 begin
@@ -164,8 +195,17 @@ begin
     raise EArgumentException.Create('dt must be finite and non-negative');
   if dt = 0 then Exit;
   Fi := Fi + dt * W;
-  X := X + V * Cos(Fi-10*deg) * dt;
-  Y := Y + V * Sin(Fi-10*deg) * dt;
+  if RecordedPlant.Enabled then
+  begin
+    Course := RecordedPlant.AdvanceCourse(RadToDeg(Fi), Course, dt);
+    X := X + V * Cos(DegToRad(Course)) * dt;
+    Y := Y + V * Sin(DegToRad(Course)) * dt;
+  end
+  else
+  begin
+    X := X + V * Cos(Fi-10*deg) * dt;
+    Y := Y + V * Sin(Fi-10*deg) * dt;
+  end;
   ReferencePoint.Integrate(dt);
 end;
 

@@ -1,4 +1,4 @@
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
         <ProjectGuid>{138209AF-FAB1-4F61-AFDC-484AA4F43AC6}</ProjectGuid>
         <ProjectVersion>20.3</ProjectVersion>
@@ -128,8 +128,12 @@
             <FormType>dfm</FormType>
         </DCCReference>
         <DCCReference Include="uMotionModel.pas"/>
+        <DCCReference Include="uRecordedPlant.pas"/>
         <DCCReference Include="uPID.pas"/>
         <DCCReference Include="uParameters.pas"/>
+        <DCCReference Include="uGateNavigation.pas"/>
+        <DCCReference Include="uGateNavigationPlus.pas"/>
+        <DCCReference Include="uAdaptiveGlide.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

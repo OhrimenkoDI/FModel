@@ -6,7 +6,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Math, Vcl.Graphics,
   Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus, System.UITypes,
   System.IniFiles, Vcl.StdCtrls, Vcl.ComCtrls, Winapi.MMSystem, uMotionModel,
-  uPID, uParameters;
+  uPID, uParameters, uGateNavigation, uAdaptiveGlide, uGateNavigationPlus, uRecordedPlant;
 
 const
   MeasurementHistorySize = 200;
@@ -18,8 +18,28 @@ type
     X, Y: Double;
   end;
   TTrajectoryBuffer = array[0..TrajectoryCapacity-1] of TTrajectoryPoint;
+  TApproachResult = record
+    Finished: Boolean;
+    StopTime, Distance, MinimumDistance: Double;
+  end;
   TSimulationFrame = record
     Model: TMotionModel;
+    Gate: TGateSimulation;
+    GatePlus: TGatePlusSimulation;
+    GatePlusReferencePoint: TReferencePoint;
+    GatePlusResult: TApproachResult;
+    GatePlusTrajectory: TTrajectoryBuffer;
+    GatePlusTrajectoryCount: Integer;
+    AdaptiveModel: TMotionModel;
+    AdaptiveController: TAdaptiveState;
+    AdaptiveResult: TApproachResult;
+    AdaptiveMinimumDistance: Double;
+    AdaptiveTrajectory: TTrajectoryBuffer;
+    AdaptiveTrajectoryCount: Integer;
+    GateReferencePoint: TReferencePoint;
+    PIDResult, GateResult: TApproachResult;
+    GateTrajectoryCount: Integer;
+    GateTrajectory: TTrajectoryBuffer;
     Controller: TPIDState;
     Time, Dt, MinimumDistance: Double;
     Step: Int64;
@@ -73,6 +93,22 @@ type
     FAutoStopDistance: Double;
     FMinimumDistance: Double;
     FModel: TMotionModel;
+    FGate: TGateSimulation;
+    FGatePlus: TGatePlusSimulation;
+    FGatePlusReferencePoint: TReferencePoint;
+    FGatePlusResult: TApproachResult;
+    FGatePlusTrajectory: TTrajectoryBuffer;
+    FGatePlusTrajectoryCount: Integer;
+    FAdaptiveModel: TMotionModel;
+    FAdaptiveController: TAdaptiveState;
+    FAdaptiveResult: TApproachResult;
+    FAdaptiveMinimumDistance: Double;
+    FAdaptiveTrajectory: TTrajectoryBuffer;
+    FAdaptiveTrajectoryCount: Integer;
+    FGateReferencePoint: TReferencePoint;
+    FPIDResult, FGateResult: TApproachResult;
+    FGateTrajectoryCount: Integer;
+    FGateTrajectory: TTrajectoryBuffer;
     FController: TPIDState;
     FTrajectory: TTrajectoryBuffer;
     FHistory: array[0..MeasurementHistorySize-1] of TSimulationFrame;
@@ -108,7 +144,7 @@ type
       Color: TColor; Width: Integer = 1);
     procedure RedrawImage;
     procedure AddTrajectoryPoint;
-    procedure DrawTrajectory(const Frame: TSimulationFrame;
+    procedure DrawTrajectory(const Points: TTrajectoryBuffer; Count: Integer; Color: TColor;
       LeftX, RightX, BottomY, TopY: Double);
   public
     destructor Destroy; override;
@@ -120,6 +156,8 @@ type
     property LastDt: Double read FLastDt;
     property StepCount: Int64 read FStepCount;
     property Model: TMotionModel read FModel;
+    property Gate: TGateSimulation read FGate;
+    property GatePlus: TGatePlusSimulation read FGatePlus;
     property Controller: TPIDState read FController;
     property ReferencePointX: Double read GetReferencePointX;
     property ReferencePointY: Double read GetReferencePointY;
@@ -159,6 +197,8 @@ begin
   FOriginX := Image1.Width div 2;
   FOriginY := Image1.Height div 2;
   FModel.Init;
+  FAdaptiveModel.Init;
+  FAdaptiveController.Init;
   PIDinit(FController);
   LoadSettings;
   AngleCorrectionCheckBox.Checked := FController.AngleCorrectionEnabled;
@@ -205,6 +245,23 @@ function TForm2.GetDisplayFrame: TSimulationFrame;
 begin
   if FHistoryIndex >= 0 then Exit(HistoryFrame(FHistoryIndex));
   Result.Model := FModel;
+  Result.Gate := FGate;
+  Result.GatePlus := FGatePlus;
+  Result.GatePlusReferencePoint := FGatePlusReferencePoint;
+  Result.GatePlusResult := FGatePlusResult;
+  Result.GatePlusTrajectory := FGatePlusTrajectory;
+  Result.GatePlusTrajectoryCount := FGatePlusTrajectoryCount;
+  Result.AdaptiveModel := FAdaptiveModel;
+  Result.AdaptiveController := FAdaptiveController;
+  Result.AdaptiveResult := FAdaptiveResult;
+  Result.AdaptiveMinimumDistance := FAdaptiveMinimumDistance;
+  Result.AdaptiveTrajectory := FAdaptiveTrajectory;
+  Result.AdaptiveTrajectoryCount := FAdaptiveTrajectoryCount;
+  Result.GateReferencePoint := FGateReferencePoint;
+  Result.PIDResult := FPIDResult;
+  Result.GateResult := FGateResult;
+  Result.GateTrajectoryCount := FGateTrajectoryCount;
+  Result.GateTrajectory := FGateTrajectory;
   Result.Controller := FController;
   Result.Time := FSimulationTime;
   Result.Dt := FLastDt;
@@ -279,22 +336,41 @@ procedure TForm2.UpdateProcessLabel;
 var Frame: TSimulationFrame;
 begin
   Frame := GetDisplayFrame;
-  OffsetLabel.Caption := Format('Смещение датчика: %.0f°', [Frame.Model.SensorBiasDegrees]);
+  if Frame.Model.RecordedPlant.Enabled then
+    OffsetLabel.Caption := Format('Общий датчик EDF: %.1f°', [Frame.Model.RecordedPlant.Parameters.CameraBias])
+  else OffsetLabel.Caption := Format('Смещение датчика: %.0f°', [Frame.Model.SensorBiasDegrees]);
   ProcessLabel.Caption := Format('t = %.3f с; dt = %.4f с; шагов: %d',
     [Frame.Time, Frame.Dt, Frame.Step]);
   if FHistoryIndex >= 0 then ProcessLabel.Caption := ProcessLabel.Caption + ' — просмотр';
   if Frame.StoppedOnDistance then
-  begin
-    ProcessLabel.Caption := ProcessLabel.Caption + ' — стоп: дистанция растёт';
-    ResultLabel.Caption := Format('Мин. расстояние: %.3f м', [Frame.MinimumDistance]);
-  end
-  else
-    ResultLabel.Caption := '';
+    ProcessLabel.Caption := ProcessLabel.Caption + ' — все четыре расчёта завершены'
+  else if Frame.PIDResult.Finished or Frame.GateResult.Finished or Frame.AdaptiveResult.Finished or Frame.GatePlusResult.Finished then
+    ProcessLabel.Caption := ProcessLabel.Caption + ' — есть зафиксированные результаты';
+  if Frame.PIDResult.Finished then
+    ResultLabel.Caption := Format('PID: стоп %.3f с; min %.3f м',
+      [Frame.PIDResult.StopTime, Frame.PIDResult.MinimumDistance])
+  else ResultLabel.Caption := 'PID: расчёт';
+  if Frame.GateResult.Finished then
+    ResultLabel.Caption := ResultLabel.Caption + Format('   |   СВП: стоп %.3f с; min %.3f м',
+      [Frame.GateResult.StopTime, Frame.GateResult.MinimumDistance])
+  else ResultLabel.Caption := ResultLabel.Caption + '   |   СВП: расчёт';
+  if Frame.AdaptiveResult.Finished then
+    ResultLabel.Caption := ResultLabel.Caption + Format('   |   Adaptive: стоп %.3f с; min %.3f м',
+      [Frame.AdaptiveResult.StopTime, Frame.AdaptiveResult.MinimumDistance])
+  else ResultLabel.Caption := ResultLabel.Caption + '   |   Adaptive: расчёт';
+  if Frame.GatePlusResult.Finished then
+    ResultLabel.Caption := ResultLabel.Caption + Format('   |   СВП+: стоп %.3f с; min %.3f м',
+      [Frame.GatePlusResult.StopTime, Frame.GatePlusResult.MinimumDistance])
+  else ResultLabel.Caption := ResultLabel.Caption + '   |   СВП+: расчёт';
+  OffsetMinusButton.Enabled := not FPIDResult.Finished and not FModel.RecordedPlant.Enabled;
+  OffsetPlusButton.Enabled := not FPIDResult.Finished and not FModel.RecordedPlant.Enabled;
+  AngleCorrectionCheckBox.Enabled := not FPIDResult.Finished;
 end;
 
 // Уменьшает смещение датчика на один градус.
 procedure TForm2.OffsetMinusButtonClick(Sender: TObject);
 begin
+  if FPIDResult.Finished then Exit;
   FModel.SensorBiasDegrees := FModel.SensorBiasDegrees - 1;
   UpdateProcessLabel;
   SaveSettings;
@@ -304,6 +380,7 @@ end;
 procedure TForm2.AngleCorrectionCheckBoxClick(Sender: TObject);
 begin
   if not FReady then Exit;
+  if FPIDResult.Finished then Exit;
   FController.AngleCorrectionEnabled := AngleCorrectionCheckBox.Checked;
   SaveSettings;
 end;
@@ -319,6 +396,7 @@ end;
 // Увеличивает смещение датчика на один градус.
 procedure TForm2.OffsetPlusButtonClick(Sender: TObject);
 begin
+  if FPIDResult.Finished then Exit;
   FModel.SensorBiasDegrees := FModel.SensorBiasDegrees + 1;
   UpdateProcessLabel;
   SaveSettings;
@@ -332,6 +410,25 @@ begin
   FHistoryNext := 0;
   FHistoryIndex := -1;
   FModel.ResetMotion;
+  FAdaptiveModel.ReferencePoint := FModel.ReferencePoint;
+  FAdaptiveModel.Diameter := FModel.Diameter;
+  FAdaptiveModel.ResetMotion;
+  FAdaptiveController.Reset;
+  FAdaptiveMinimumDistance := Hypot(FAdaptiveModel.ReferencePoint.X, FAdaptiveModel.ReferencePoint.Y);
+  FAdaptiveResult := Default(TApproachResult);
+  FAdaptiveTrajectoryCount := 0;
+  FGateReferencePoint := FModel.ReferencePoint;
+  FGate.Reset(FGateReferencePoint.X, FGateReferencePoint.Y);
+  FGate.RecordedPlant := FModel.RecordedPlant;
+  FPIDResult := Default(TApproachResult);
+  FGateResult := Default(TApproachResult);
+  FGateTrajectoryCount := 0;
+  FGatePlusReferencePoint := FModel.ReferencePoint;
+  FGatePlus.Reset(FGatePlusReferencePoint.X, FGatePlusReferencePoint.Y);
+  FGatePlus.RecordedPlant := FModel.RecordedPlant;
+  if FGatePlus.RecordedPlant.Enabled then FGatePlus.Course := FGatePlus.Heading;
+  FGatePlusResult := Default(TApproachResult);
+  FGatePlusTrajectoryCount := 0;
   PIDreset(FController);
   FController.AngleCorrectionEnabled := AngleCorrectionCheckBox.Checked;
   FMinimumDistance := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
@@ -354,13 +451,12 @@ begin
     StopProcess;
     Exit;
   end;
+  if FStoppedOnDistance then Exit; // Completed results are reset only by Init.
   // Start a fresh interval on every resume: paused time is excluded.
   FHistoryIndex := -1;
   if not QueryPerformanceCounter(FLastCounter) then
     raise Exception.Create('Не удалось прочитать системное время.');
   FTimerResolutionActive := timeBeginPeriod(1) = TIMERR_NOERROR;
-  FMinimumDistance := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
-  FStoppedOnDistance := False;
   IntegratorTimer.Enabled := True;
   StartStopButton.Caption := 'Стоп';
   UpdateHistoryControls;
@@ -421,33 +517,93 @@ end;
 // Выполняет шаг модели, сохраняет историю и проверяет условие остановки.
 procedure TForm2.Integrate(dt: Double);
 var
-  DistanceBefore, DistanceAfter: Double;
+  DistanceBefore, DistanceAfter, GateBefore, GateAfter, AdaptiveBefore, AdaptiveAfter, GatePlusBefore, GatePlusAfter: Double;
+  ObservedAngle, ObservedGyro: Double;
+
+  procedure FinishApproach(var R: TApproachResult; Distance, Minimum: Double);
+  begin
+    R.Finished := True;
+    R.StopTime := FSimulationTime;
+    R.Distance := Distance;
+    R.MinimumDistance := Minimum;
+  end;
+
 begin
-  DistanceBefore := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
   if IsNan(dt) or IsInfinite(dt) or (dt < 0) then
     raise EArgumentException.Create('dt must be finite and non-negative');
-  if dt = 0 then Exit;
+  if (dt = 0) or FStoppedOnDistance then Exit;
+  DistanceBefore := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
+  GateBefore := Hypot(FGateReferencePoint.X - FGate.X, FGateReferencePoint.Y - FGate.Y);
+  GatePlusBefore := Hypot(FGatePlusReferencePoint.X - FGatePlus.X, FGatePlusReferencePoint.Y - FGatePlus.Y);
 
-  // Связь модулей только здесь: измерение -> регулятор -> команда -> движение.
-  // Модель хранит радианы, регулятор принимает и возвращает градусы.
-  FModel.W := DegToRad(PIDupdate(FController, dt, RadToDeg(FModel.MeasureAngle), RadToDeg(FModel.W)));
-
-  FModel.Integrate(dt);
+  AdaptiveBefore := Hypot(FAdaptiveModel.ReferencePoint.X-FAdaptiveModel.X, FAdaptiveModel.ReferencePoint.Y-FAdaptiveModel.Y);
+  // Each algorithm owns a target copy; only an active pair advances in time.
+  if not FPIDResult.Finished then
+  begin
+    ObservedAngle := RadToDeg(FModel.MeasureAngle);
+    ObservedGyro := FModel.GyroDegrees;
+    FModel.ApplyControl(PIDupdate(FController, dt, ObservedAngle, ObservedGyro), dt);
+  end;
+  if not FGateResult.Finished then
+  begin
+    FGate.Step(dt, FGateReferencePoint.X, FGateReferencePoint.Y,
+      FGateReferencePoint.V * Cos(FGateReferencePoint.Fi),
+      FGateReferencePoint.V * Sin(FGateReferencePoint.Fi));
+    FGateReferencePoint.Integrate(dt);
+  end;
+  if not FGatePlusResult.Finished then
+  begin
+    FGatePlus.Step(dt, FGatePlusReferencePoint.X, FGatePlusReferencePoint.Y,
+      FGatePlusReferencePoint.V * Cos(FGatePlusReferencePoint.Fi),
+      FGatePlusReferencePoint.V * Sin(FGatePlusReferencePoint.Fi));
+    FGatePlusReferencePoint.Integrate(dt);
+  end;
+  if not FAdaptiveResult.Finished then
+  begin
+    ObservedAngle := RadToDeg(FAdaptiveModel.MeasureAngle);
+    ObservedGyro := FAdaptiveModel.GyroDegrees;
+    FAdaptiveModel.ApplyControl(FAdaptiveController.Update(dt, ObservedAngle, ObservedGyro), dt);
+  end;
 
   FHistoryIndex := -1;
   FLastDt := dt;
   Inc(FStepCount);
+  // Append the terminal point before latching each independent completion flag.
   AddTrajectoryPoint;
   FSimulationTime := FSimulationTime + dt;
-  DistanceAfter := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
-  FMinimumDistance := Min(FMinimumDistance, Min(DistanceBefore, DistanceAfter));
-  if FAutoStopEnabled and IntegratorTimer.Enabled and
-    (DistanceAfter < FAutoStopDistance) and
-    (DistanceAfter > DistanceBefore + 1E-9) then
+  if not FPIDResult.Finished then
   begin
-    StopProcess;
-    FStoppedOnDistance := True;
+    DistanceAfter := Hypot(FModel.ReferencePoint.X - FModel.X, FModel.ReferencePoint.Y - FModel.Y);
+    FMinimumDistance := Min(FMinimumDistance, Min(DistanceBefore, DistanceAfter));
+    if FAutoStopEnabled and (DistanceAfter < FAutoStopDistance) and
+      (DistanceAfter > DistanceBefore + 1E-9) then
+      FinishApproach(FPIDResult, DistanceAfter, FMinimumDistance);
   end;
+  if not FGateResult.Finished then
+  begin
+    GateAfter := Hypot(FGateReferencePoint.X - FGate.X, FGateReferencePoint.Y - FGate.Y);
+    if FAutoStopEnabled and (GateAfter < FAutoStopDistance) and
+      (GateAfter > GateBefore + 1E-9) then
+      FinishApproach(FGateResult, GateAfter, FGate.MinimumDistance);
+  end;
+  if not FAdaptiveResult.Finished then
+  begin
+    AdaptiveAfter := Hypot(FAdaptiveModel.ReferencePoint.X-FAdaptiveModel.X, FAdaptiveModel.ReferencePoint.Y-FAdaptiveModel.Y);
+    FAdaptiveMinimumDistance := Min(FAdaptiveMinimumDistance,Min(AdaptiveBefore,AdaptiveAfter));
+    if FAutoStopEnabled and (AdaptiveAfter < FAutoStopDistance) and
+      (AdaptiveAfter > AdaptiveBefore + 1E-9) then
+      FinishApproach(FAdaptiveResult,AdaptiveAfter,FAdaptiveMinimumDistance);
+  end;
+  if not FGatePlusResult.Finished then
+  begin
+    GatePlusAfter := Hypot(FGatePlusReferencePoint.X - FGatePlus.X, FGatePlusReferencePoint.Y - FGatePlus.Y);
+    if FAutoStopEnabled and (GatePlusAfter < FAutoStopDistance) and
+      (GatePlusAfter > GatePlusBefore + 1E-9) then
+      FinishApproach(FGatePlusResult, GatePlusAfter, FGatePlus.MinimumDistance);
+  end;
+  FStoppedOnDistance := FPIDResult.Finished and FGateResult.Finished and
+    FAdaptiveResult.Finished and FGatePlusResult.Finished;
+  if FStoppedOnDistance then StopProcess;
   AddHistoryFrame;
   if not FIntegrating then
   begin
@@ -457,24 +613,29 @@ begin
   end;
 end;
 
-// Добавляет положение модели в массив точек траектории.
+// Completed paths keep their terminal point and never shift out of the buffer.
 procedure TForm2.AddTrajectoryPoint;
-var
-  I: Integer;
-begin
-  if FTrajectoryCount = Length(FTrajectory) then
+  procedure Append(var Points: TTrajectoryBuffer; var Count: Integer; X, Y: Double);
+  var I: Integer;
   begin
-    for I := 1 to High(FTrajectory) do
-      FTrajectory[I - 1] := FTrajectory[I];
-    Dec(FTrajectoryCount);
+    if Count = Length(Points) then
+    begin
+      for I := 1 to High(Points) do Points[I - 1] := Points[I];
+      Dec(Count);
+    end;
+    Points[Count].X := X;
+    Points[Count].Y := Y;
+    Inc(Count);
   end;
-  FTrajectory[FTrajectoryCount].X := FModel.X;
-  FTrajectory[FTrajectoryCount].Y := FModel.Y;
-  Inc(FTrajectoryCount);
+begin
+  if not FPIDResult.Finished then Append(FTrajectory, FTrajectoryCount, FModel.X, FModel.Y);
+  if not FGateResult.Finished then Append(FGateTrajectory, FGateTrajectoryCount, FGate.X, FGate.Y);
+  if not FGatePlusResult.Finished then Append(FGatePlusTrajectory, FGatePlusTrajectoryCount, FGatePlus.X, FGatePlus.Y);
+  if not FAdaptiveResult.Finished then Append(FAdaptiveTrajectory,FAdaptiveTrajectoryCount,FAdaptiveModel.X,FAdaptiveModel.Y);
 end;
 
 // Рисует видимую часть траектории выбранного состояния.
-procedure TForm2.DrawTrajectory(const Frame: TSimulationFrame;
+procedure TForm2.DrawTrajectory(const Points: TTrajectoryBuffer; Count: Integer; Color: TColor;
   LeftX, RightX, BottomY, TopY: Double);
 var
   I, PX, PY: Integer;
@@ -496,29 +657,29 @@ var
   end;
 
 begin
-  for I := 1 to Frame.TrajectoryCount - 1 do
+  for I := 1 to Count - 1 do
   begin
-    X := Frame.Trajectory[I - 1].X;
-    Y := Frame.Trajectory[I - 1].Y;
-    DX := Frame.Trajectory[I].X - X;
-    DY := Frame.Trajectory[I].Y - Y;
+    X := Points[I - 1].X;
+    Y := Points[I - 1].Y;
+    DX := Points[I].X - X;
+    DY := Points[I].Y - Y;
     T0 := 0;
     T1 := 1;
     if Clip(-DX, X - LeftX) and Clip(DX, RightX - X) and
        Clip(-DY, Y - BottomY) and Clip(DY, TopY - Y) then
       Line3D(X + T0 * DX, Y + T0 * DY, 0,
-        X + T1 * DX, Y + T1 * DY, 0, clBlue);
+        X + T1 * DX, Y + T1 * DY, 0, Color);
   end;
   with Image1.Picture.Bitmap.Canvas do
   begin
     Brush.Style := bsSolid;
-    Brush.Color := clBlue;
-    for I := 0 to Frame.TrajectoryCount - 1 do
-      if (Frame.Trajectory[I].X >= LeftX) and (Frame.Trajectory[I].X <= RightX) and
-         (Frame.Trajectory[I].Y >= BottomY) and (Frame.Trajectory[I].Y <= TopY) then
+    Brush.Color := Color;
+    for I := 0 to Count - 1 do
+      if (Points[I].X >= LeftX) and (Points[I].X <= RightX) and
+         (Points[I].Y >= BottomY) and (Points[I].Y <= TopY) then
       begin
-        PX := d2x(Frame.Trajectory[I].X, Frame.Trajectory[I].Y, 0);
-        PY := d2y(Frame.Trajectory[I].X, Frame.Trajectory[I].Y, 0);
+        PX := d2x(Points[I].X, Points[I].Y, 0);
+        PY := d2y(Points[I].X, Points[I].Y, 0);
         FillRect(Rect(PX - 1, PY - 1, PX + 2, PY + 2));
       end;
     Brush.Style := bsClear;
@@ -594,6 +755,72 @@ begin
   Result[19] := FController.Parameters.BiasLimit;
   Result[20] := FController.Parameters.DerivativeFilterTime;
   Result[21] := FAutoStopDistance;
+  Result[22] := FGate.Parameters.N;
+  Result[23] := FGate.Parameters.LeadTime;
+  Result[24] := FGate.Parameters.KLambda;
+  Result[25] := FGate.Parameters.MaxRate;
+  Result[26] := FGate.Parameters.FilterTime;
+  Result[27] := FGate.Parameters.RateKp;
+  Result[28] := FGate.Parameters.RateKi;
+  Result[29] := FGate.Parameters.ActuatorTime;
+  Result[30] := FGate.Parameters.SlipTime;
+  Result[31] := FModel.SpeedKmh;
+  Result[32] := FGate.Parameters.FreezeDistance;
+  Result[33] := FGate.Parameters.SensorDelay;
+  Result[34] := FGate.Parameters.SensorBias;
+  Result[35] := FModel.InitialHeadingDegrees;
+  Result[36] := FAdaptiveController.Parameters.CommandLimit;
+  Result[37] := FAdaptiveController.Parameters.SlidingGain;
+  Result[38] := FAdaptiveController.Parameters.SwitchingGain;
+  Result[39] := FAdaptiveController.Parameters.Kappa;
+  Result[40] := FAdaptiveController.Parameters.Lambda;
+  Result[41] := FAdaptiveController.Parameters.IdentifierAlpha;
+  Result[42] := FAdaptiveController.Parameters.CovarianceScale;
+  Result[43] := FAdaptiveController.Parameters.DenominatorGuard;
+  Result[44] := FAdaptiveController.Parameters.RateGain;
+  Result[45] := FAdaptiveController.Parameters.AngleLimit;
+  Result[46] := FAdaptiveController.Parameters.ReferenceCoefficients[0];
+  Result[47] := FAdaptiveController.Parameters.ReferenceCoefficients[1];
+  Result[48] := FAdaptiveController.Parameters.ReferenceCoefficients[2];
+  Result[49] := FAdaptiveController.Parameters.IdentifierFilter[0];
+  Result[50] := FAdaptiveController.Parameters.IdentifierFilter[1];
+  Result[51] := FAdaptiveController.Parameters.IdentifierFilter[2];
+  Result[52] := FAdaptiveModel.AngleCount;
+  Result[53] := FAdaptiveModel.SensorBiasDegrees;
+  Result[54] := FGatePlus.Parameters.ObserverSlipTime;
+  Result[55] := FGatePlus.Parameters.LeadFilterTime;
+  Result[56] := FGatePlus.Parameters.MaxCommandAcceleration;
+  Result[57] := FGatePlus.Parameters.TerminalCommandAcceleration;
+  Result[58] := FGatePlus.Parameters.TerminalMaxRate;
+  Result[59] := FGatePlus.Parameters.PredictionTime;
+  Result[60] := FGatePlus.Parameters.SafeRate;
+  Result[61] := FGatePlus.Parameters.DetectorHalfAngle;
+  Result[62] := FGatePlus.Parameters.InitialSlipDegrees;
+  Result[63] := FGatePlus.Parameters.N;
+  Result[64] := FGatePlus.Parameters.LeadTime;
+  Result[65] := FGatePlus.Parameters.KLambda;
+  Result[66] := FGatePlus.Parameters.MaxRate;
+  Result[67] := FGatePlus.Parameters.FilterTime;
+  Result[68] := FGatePlus.Parameters.RateKp;
+  Result[69] := FGatePlus.Parameters.RateKi;
+  Result[70] := FGatePlus.Parameters.ActuatorTime;
+  Result[71] := FGatePlus.Parameters.SlipTime;
+  Result[72] := FGatePlus.Parameters.FreezeDistance;
+  Result[73] := FGatePlus.Parameters.SensorDelay;
+  Result[74] := FGatePlus.Parameters.SensorBias;
+  Result[75] := FModel.RecordedPlant.Parameters.Profile;
+  Result[76] := FModel.RecordedPlant.Parameters.GainScale;
+  Result[77] := FModel.RecordedPlant.Parameters.ExtraDelay;
+  Result[78] := FModel.RecordedPlant.Parameters.FrequencyScale;
+  Result[79] := FModel.RecordedPlant.Parameters.DampingScale;
+  Result[80] := FModel.RecordedPlant.Parameters.CameraHz;
+  Result[81] := FModel.RecordedPlant.Parameters.CameraDelay;
+  Result[82] := FModel.RecordedPlant.Parameters.CompensationTime;
+  Result[83] := FModel.RecordedPlant.Parameters.NoiseScale;
+  Result[84] := FModel.RecordedPlant.Parameters.Seed;
+  Result[85] := FModel.RecordedPlant.Parameters.CourseTime;
+  Result[86] := FModel.RecordedPlant.Parameters.CameraBias;
+  Result[87] := FModel.RecordedPlant.Parameters.OutputLimit;
 end;
 
 // Передаёт проверенные настройки их владельцам, не связывая модель с регулятором.
@@ -621,6 +848,86 @@ begin
   FController.Parameters.BiasLimit := Values[19];
   FController.Parameters.DerivativeFilterTime := Values[20];
   FAutoStopDistance := Values[21];
+  FGate.Parameters.N := Values[22];
+  FGate.Parameters.LeadTime := Values[23];
+  FGate.Parameters.KLambda := Values[24];
+  FGate.Parameters.MaxRate := Values[25];
+  FGate.Parameters.FilterTime := Values[26];
+  FGate.Parameters.RateKp := Values[27];
+  FGate.Parameters.RateKi := Values[28];
+  FGate.Parameters.ActuatorTime := Values[29];
+  FGate.Parameters.SlipTime := Values[30];
+  FGate.Parameters.SpeedKmh := Values[31];
+  FGatePlus.Parameters.SpeedKmh := Values[31];
+  FModel.SpeedKmh := Values[31];
+  FAdaptiveModel.SpeedKmh := Values[31];
+  FGate.Parameters.FreezeDistance := Values[32];
+  FGate.Parameters.SensorDelay := Round(Values[33]);
+  FGate.Parameters.SensorBias := Values[34];
+  FModel.InitialHeadingDegrees := Values[35];
+  FAdaptiveModel.InitialHeadingDegrees := Values[35];
+  FGate.Parameters.InitialHeadingDegrees := Values[35];
+  FGatePlus.Parameters.InitialHeadingDegrees := Values[35];
+  FAdaptiveController.Parameters.CommandLimit := Values[36];
+  FAdaptiveController.Parameters.SlidingGain := Values[37];
+  FAdaptiveController.Parameters.SwitchingGain := Values[38];
+  FAdaptiveController.Parameters.Kappa := Values[39];
+  FAdaptiveController.Parameters.Lambda := Values[40];
+  FAdaptiveController.Parameters.IdentifierAlpha := Values[41];
+  FAdaptiveController.Parameters.CovarianceScale := Values[42];
+  FAdaptiveController.Parameters.DenominatorGuard := Values[43];
+  FAdaptiveController.Parameters.RateGain := Values[44];
+  FAdaptiveController.Parameters.AngleLimit := Values[45];
+  FAdaptiveController.Parameters.ReferenceCoefficients[0] := Values[46];
+  FAdaptiveController.Parameters.ReferenceCoefficients[1] := Values[47];
+  FAdaptiveController.Parameters.ReferenceCoefficients[2] := Values[48];
+  FAdaptiveController.Parameters.IdentifierFilter[0] := Values[49];
+  FAdaptiveController.Parameters.IdentifierFilter[1] := Values[50];
+  FAdaptiveController.Parameters.IdentifierFilter[2] := Values[51];
+  FAdaptiveModel.AngleCount := Round(Values[52]);
+  FAdaptiveModel.SensorBiasDegrees := Values[53];
+  FGatePlus.Parameters.ObserverSlipTime := Values[54];
+  FGatePlus.Parameters.LeadFilterTime := Values[55];
+  FGatePlus.Parameters.MaxCommandAcceleration := Values[56];
+  FGatePlus.Parameters.TerminalCommandAcceleration := Values[57];
+  FGatePlus.Parameters.TerminalMaxRate := Values[58];
+  FGatePlus.Parameters.PredictionTime := Values[59];
+  FGatePlus.Parameters.SafeRate := Values[60];
+  FGatePlus.Parameters.DetectorHalfAngle := Values[61];
+  FGatePlus.Parameters.InitialSlipDegrees := Values[62];
+  FGatePlus.Parameters.N := Values[63];
+  FGatePlus.Parameters.LeadTime := Values[64];
+  FGatePlus.Parameters.KLambda := Values[65];
+  FGatePlus.Parameters.MaxRate := Values[66];
+  FGatePlus.Parameters.FilterTime := Values[67];
+  FGatePlus.Parameters.RateKp := Values[68];
+  FGatePlus.Parameters.RateKi := Values[69];
+  FGatePlus.Parameters.ActuatorTime := Values[70];
+  FGatePlus.Parameters.SlipTime := Values[71];
+  FGatePlus.Parameters.FreezeDistance := Values[72];
+  FGatePlus.Parameters.SensorDelay := Round(Values[73]);
+  FGatePlus.Parameters.SensorBias := Values[74];
+  FModel.RecordedPlant.Parameters.Profile := Round(Values[75]);
+  FModel.RecordedPlant.Parameters.GainScale := Values[76];
+  FModel.RecordedPlant.Parameters.ExtraDelay := Values[77];
+  FModel.RecordedPlant.Parameters.FrequencyScale := Values[78];
+  FModel.RecordedPlant.Parameters.DampingScale := Values[79];
+  FModel.RecordedPlant.Parameters.CameraHz := Values[80];
+  FModel.RecordedPlant.Parameters.CameraDelay := Values[81];
+  FModel.RecordedPlant.Parameters.CompensationTime := Values[82];
+  FModel.RecordedPlant.Parameters.NoiseScale := Values[83];
+  FModel.RecordedPlant.Parameters.Seed := Round(Values[84]);
+  FModel.RecordedPlant.Parameters.CourseTime := Values[85];
+  FModel.RecordedPlant.Parameters.CameraBias := Values[86];
+  FModel.RecordedPlant.Parameters.OutputLimit := Values[87];
+  case Round(Values[75]) of
+    1: Caption := 'FModel — по записи EDF, ось Roll';
+    2: Caption := 'FModel — по записи EDF, ось Pitch';
+    else Caption := 'FModel';
+  end;
+  FAdaptiveModel.RecordedPlant.Parameters := FModel.RecordedPlant.Parameters;
+  FGate.RecordedPlant.Parameters := FModel.RecordedPlant.Parameters;
+  FGatePlus.RecordedPlant.Parameters := FModel.RecordedPlant.Parameters;
   FMuXYZ[1] := FMuXYZ[0];
 end;
 
@@ -671,7 +978,8 @@ procedure TForm2.Image1MouseDown(Sender: TObject; Button: TMouseButton;
 begin
   if Button <> mbLeft then
     Exit;
-  FDraggingReferencePoint := (FHistoryIndex < 0) and NearReferencePoint(X, Y);
+  FDraggingReferencePoint := (FHistoryIndex < 0) and not FPIDResult.Finished and
+    not FGateResult.Finished and not FAdaptiveResult.Finished and not FGatePlusResult.Finished and NearReferencePoint(X, Y);
   FDragging := True;
   FReferencePointOffsetX := (X - FOriginX) / FMuXYZ[0] - FModel.ReferencePoint.X;
   FReferencePointOffsetY := (FOriginY - Y) / FMuXYZ[1] - FModel.ReferencePoint.Y;
@@ -697,12 +1005,16 @@ procedure TForm2.MoveDraggedPoint(X, Y: Integer);
 begin
   if FDraggingReferencePoint then
   begin
+    if FPIDResult.Finished or FGateResult.Finished or FAdaptiveResult.Finished or FGatePlusResult.Finished then Exit;
     FModel.ReferencePoint.X := (EnsureRange(X, 0, Image1.Width - 1) - FOriginX) /
       FMuXYZ[0] - FReferencePointOffsetX;
     FModel.ReferencePoint.Y := (FOriginY - EnsureRange(Y, 0, Image1.Height - 1)) /
       FMuXYZ[1] - FReferencePointOffsetY;
     FModel.ReferencePoint.InitialX := FModel.ReferencePoint.X;
     FModel.ReferencePoint.InitialY := FModel.ReferencePoint.Y;
+    FGateReferencePoint := FModel.ReferencePoint;
+    FGatePlusReferencePoint := FModel.ReferencePoint;
+    FAdaptiveModel.ReferencePoint := FModel.ReferencePoint;
   end
   else
   begin
@@ -799,6 +1111,28 @@ var
   LabelRects: array[0..6] of TRect;
   A, B, Radius, LeftX, RightX, BottomY, TopY, GridStep, Arrow, Angle: Double;
 
+  // Both red target circles remain at their own completion coordinates.
+  procedure DrawTarget(const Target: TReferencePoint; const Name: string;
+    LabelColor: TColor; Finished: Boolean; LabelOffset: Integer);
+  var R: Double; PX, PY: Integer; Caption: string;
+  begin
+    R := Max(Target.Diameter / 2, 4 / FMuXYZ[0]);
+    if (Target.X + R < LeftX) or (Target.X - R > RightX) or
+       (Target.Y + R < BottomY) or (Target.Y - R > TopY) then Exit;
+    PX := d2x(Target.X, Target.Y, 0); PY := d2y(Target.X, Target.Y, 0);
+    with Image1.Picture.Bitmap.Canvas do
+    begin
+      Pen.Color := clRed; Pen.Width := 2;
+      Brush.Color := clRed;
+      if Finished then Brush.Style := bsClear else Brush.Style := bsSolid;
+      Ellipse(d2x(Target.X - R, Target.Y, 0), d2y(Target.X, Target.Y + R, 0),
+        d2x(Target.X + R, Target.Y, 0), d2y(Target.X, Target.Y - R, 0));
+      Caption := Name;
+      if Finished then Caption := Caption + ' (стоп)';
+      Brush.Style := bsClear; Font.Color := LabelColor;
+      TextOut(PX + 8, PY + LabelOffset, Caption);
+    end;
+  end;
   // Размещает подпись оси в пределах изображения без пересечения с другими надписями.
   procedure DrawAxisLabel(X, Y: Integer; const S: string);
   var R: TRect; J, LabelWidth, LabelHeight: Integer;
@@ -857,7 +1191,39 @@ begin
   Line3D(0, TopY, 0, Arrow / 2, TopY - Arrow, 0, clGreen);
 
   // Circle follows the model position, using its configured diameter.
-  DrawTrajectory(Frame, LeftX, RightX, BottomY, TopY);
+  DrawTrajectory(Frame.Trajectory, Frame.TrajectoryCount, clBlue, LeftX, RightX, BottomY, TopY);
+  DrawTrajectory(Frame.GateTrajectory, Frame.GateTrajectoryCount, clPurple, LeftX, RightX, BottomY, TopY);
+  DrawTrajectory(Frame.GatePlusTrajectory, Frame.GatePlusTrajectoryCount, clTeal, LeftX, RightX, BottomY, TopY);
+  DrawTrajectory(Frame.AdaptiveTrajectory,Frame.AdaptiveTrajectoryCount,$000080FF,LeftX,RightX,BottomY,TopY);
+  if (Frame.AdaptiveModel.X >= LeftX) and (Frame.AdaptiveModel.X <= RightX) and
+     (Frame.AdaptiveModel.Y >= BottomY) and (Frame.AdaptiveModel.Y <= TopY) then
+  begin
+    Radius := 6 / FMuXYZ[0];
+    Line3D(Frame.AdaptiveModel.X-Radius,Frame.AdaptiveModel.Y-Radius,0,
+      Frame.AdaptiveModel.X+Radius,Frame.AdaptiveModel.Y+Radius,0,$000080FF,2);
+    Line3D(Frame.AdaptiveModel.X-Radius,Frame.AdaptiveModel.Y+Radius,0,
+      Frame.AdaptiveModel.X+Radius,Frame.AdaptiveModel.Y-Radius,0,$000080FF,2);
+  end;
+  if (Frame.Gate.X >= LeftX) and (Frame.Gate.X <= RightX) and
+     (Frame.Gate.Y >= BottomY) and (Frame.Gate.Y <= TopY) then
+  begin
+    Radius := 7 / FMuXYZ[0];
+    Line3D(Frame.Gate.X - Radius, Frame.Gate.Y, 0, Frame.Gate.X + Radius, Frame.Gate.Y, 0, clPurple, 2);
+    Line3D(Frame.Gate.X, Frame.Gate.Y - Radius, 0, Frame.Gate.X, Frame.Gate.Y + Radius, 0, clPurple, 2);
+    Line3D(Frame.Gate.X, Frame.Gate.Y, 0,
+      Frame.Gate.X + 3 * Radius * Cos(DegToRad(Frame.Gate.Heading)),
+      Frame.Gate.Y + 3 * Radius * Sin(DegToRad(Frame.Gate.Heading)), 0, clPurple, 2);
+  end;
+  if (Frame.GatePlus.X >= LeftX) and (Frame.GatePlus.X <= RightX) and
+     (Frame.GatePlus.Y >= BottomY) and (Frame.GatePlus.Y <= TopY) then
+  begin
+    Radius := 7 / FMuXYZ[0];
+    Line3D(Frame.GatePlus.X - Radius, Frame.GatePlus.Y, 0, Frame.GatePlus.X + Radius, Frame.GatePlus.Y, 0, clTeal, 2);
+    Line3D(Frame.GatePlus.X, Frame.GatePlus.Y - Radius, 0, Frame.GatePlus.X, Frame.GatePlus.Y + Radius, 0, clTeal, 2);
+    Line3D(Frame.GatePlus.X, Frame.GatePlus.Y, 0,
+      Frame.GatePlus.X + 3 * Radius * Cos(DegToRad(Frame.GatePlus.Heading)),
+      Frame.GatePlus.Y + 3 * Radius * Sin(DegToRad(Frame.GatePlus.Heading)), 0, clTeal, 2);
+  end;
   Radius := Frame.Model.Diameter / 2;
   // Skip off-screen geometry before converting growing world coordinates to pixels.
   if (Frame.Model.X + Radius >= LeftX) and (Frame.Model.X - Radius <= RightX) and
@@ -870,31 +1236,24 @@ begin
         Frame.Model.X + Radius * Cos(B), Frame.Model.Y + Radius * Sin(B), 0, clBlue);
     end;
 
-  Radius := Frame.Model.ReferencePoint.Diameter / 2;
-  if (Frame.Model.ReferencePoint.X + Radius >= LeftX) and (Frame.Model.ReferencePoint.X - Radius <= RightX) and
-     (Frame.Model.ReferencePoint.Y + Radius >= BottomY) and (Frame.Model.ReferencePoint.Y - Radius <= TopY) then
-    with Image1.Picture.Bitmap.Canvas do
-    begin
-      Pen.Color := clRed;
-      Pen.Width := 1;
-      Brush.Style := bsSolid;
-      Brush.Color := clRed;
-      Ellipse(d2x(Frame.Model.ReferencePoint.X - Radius, Frame.Model.ReferencePoint.Y, 0),
-        d2y(Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y + Radius, 0),
-        d2x(Frame.Model.ReferencePoint.X + Radius, Frame.Model.ReferencePoint.Y, 0),
-        d2y(Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y - Radius, 0));
-      Brush.Style := bsClear;
-    end;
-
+  if not Frame.PIDResult.Finished and not Frame.GateResult.Finished and not Frame.AdaptiveResult.Finished and not Frame.GatePlusResult.Finished then
+    DrawTarget(Frame.Model.ReferencePoint, 'Цель PID / СВП / Adaptive / СВП+', clRed, False, -18)
+  else
+  begin
+    DrawTarget(Frame.Model.ReferencePoint, 'Цель PID', clBlue, Frame.PIDResult.Finished, -18);
+    DrawTarget(Frame.GateReferencePoint, 'Цель СВП', clPurple, Frame.GateResult.Finished, 8);
+    DrawTarget(Frame.AdaptiveModel.ReferencePoint, 'Цель Adaptive', $000080FF, Frame.AdaptiveResult.Finished, 27);
+    DrawTarget(Frame.GatePlusReferencePoint, 'Цель СВП+', clTeal, Frame.GatePlusResult.Finished, 46);
+  end;
   // Каждому показателю отведена своя строка; высота зависит от фактического шрифта.
-  SetLength(InfoLines, 12);
+  SetLength(InfoLines, 22);
   InfoLines[0] := Format('Масштаб: %.3f пкс/м; диаметры: %g / %g м',
     [FMuXYZ[0], Frame.Model.Diameter, Frame.Model.ReferencePoint.Diameter]);
   InfoLines[1] := Format('Область: %.2f x %.2f м; сетка: %g м',
     [W / FMuXYZ[0], H / FMuXYZ[1], GridStep]);
   InfoLines[2] := Format('X = %.2f м; Y = %.2f м; Fi = %.3f°; V = %.1f км/ч',
     [Frame.Model.X, Frame.Model.Y, RadToDeg(Frame.Model.Fi), Frame.Model.V / KmhToMetresPerSecond]);
-  InfoLines[3] := Format('Опорная точка: X = %.2f м; Y = %.2f м; Fi = %.1f°; V = %.1f км/ч',
+  InfoLines[3] := Format('Цель PID: X = %.2f м; Y = %.2f м; Fi = %.1f°; V = %.1f км/ч',
     [Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y,
      RadToDeg(Frame.Model.ReferencePoint.Fi), Frame.Model.ReferencePoint.V / KmhToMetresPerSecond]);
   if Frame.Model.TryAngleToPoint(Frame.Model.ReferencePoint.X, Frame.Model.ReferencePoint.Y, Angle) then
@@ -914,6 +1273,40 @@ begin
     [Frame.Controller.Wprop, Frame.Controller.Wint, Frame.Controller.Wdiff]);
   InfoLines[10] := Format('Выход регулятора W = %.6f °/с', [Frame.Controller.W]);
   InfoLines[11] := Format('Входная угловая скорость W = %.6f °/с', [Frame.Controller.InputW]);
+  InfoLines[12] := 'PID — синий; СВП — фиолетовый; Adaptive — оранжевый; СВП+ — бирюзовый';
+  InfoLines[13] := Format('СВП: r = %.2f; r зад = %.2f °/с; скольжение = %.2f°',
+    [Frame.Gate.Rate, Frame.Gate.Controller.CommandRate, RadToDeg(ArcTan2(Sin(DegToRad(Frame.Gate.Course - Frame.Gate.Heading)),
+      Cos(DegToRad(Frame.Gate.Course - Frame.Gate.Heading))))]);
+  InfoLines[14] := Format('СВП: мин. расстояние = %.3f м; скорость ЛВ = %.2f °/с',
+    [Frame.Gate.MinimumDistance, Frame.Gate.Controller.LOSRate]);
+  if Frame.GateResult.Finished then InfoLines[15] := Format('СВП: завершено; дистанция остановки %.3f м', [Frame.GateResult.Distance])
+  else if Frame.Gate.Controller.Frozen then InfoLines[15] := 'СВП: команда заморожена (ближняя зона стенда)'
+  else InfoLines[15] := 'СВП: наведение по углу и гироскопу';
+  InfoLines[16] := Format('Adaptive: W = %.3f °/с; min = %.3f м',
+    [Frame.AdaptiveController.Output,Frame.AdaptiveMinimumDistance]);
+  InfoLines[17] := Format('Adaptive: поверхность = %.4f; невязка = %.4f',
+    [Frame.AdaptiveController.SlidingSurface,Frame.AdaptiveController.Residual]);
+  InfoLines[18] := Format('Adaptive: theta = %.2f; %.2f; %.2f; %.2f',
+    [Frame.AdaptiveController.Theta[0],Frame.AdaptiveController.Theta[1],
+     Frame.AdaptiveController.Theta[2],Frame.AdaptiveController.Theta[3]]);
+  InfoLines[19] := Format('СВП+: r = %.2f; r зад = %.2f °/с; β = %.2f°; оценка = %.2f°',
+    [Frame.GatePlus.Rate, Frame.GatePlus.Controller.CommandRate,
+     RadToDeg(ArcTan2(Sin(DegToRad(Frame.GatePlus.Heading - Frame.GatePlus.Course)),
+       Cos(DegToRad(Frame.GatePlus.Heading - Frame.GatePlus.Course)))), Frame.GatePlus.Controller.EstimatedSlip]);
+  InfoLines[20] := Format('СВП+: min = %.3f м; скорость ЛВ = %.2f °/с; остаточный поворот = %.2f°',
+    [Frame.GatePlus.MinimumDistance, Frame.GatePlus.Controller.LOSRate, Frame.GatePlus.Controller.PredictedCourseChange]);
+  if Frame.GatePlusResult.Finished then InfoLines[21] := Format('СВП+: завершено; дистанция остановки %.3f м', [Frame.GatePlusResult.Distance])
+  else if Frame.GatePlus.Controller.PassageConfirmed then
+    InfoLines[21] := 'СВП+: ближайшее сближение подтверждено стендом'
+  else if Frame.GatePlus.Controller.PredictionExpired and Frame.GatePlus.Controller.TargetLost then
+    InfoLines[21] := 'СВП+: цель недоступна; ограниченное гашение скольжения'
+  else if Frame.GatePlus.Controller.Mode = gpmPassage then
+    InfoLines[21] := 'СВП+: прохождение по короткому прогнозу (без подтверждения)'
+  else if Frame.GatePlus.Controller.TargetLost then
+    InfoLines[21] := 'СВП+: цель потеряна; короткий прогноз'
+  else if Frame.GatePlus.Controller.Mode = gpmTerminal then
+    InfoLines[21] := 'СВП+: терминальное наведение (ближняя зона стенда)'
+  else InfoLines[21] := 'СВП+: наведение по углу и гироскопу';
   with Image1.Picture.Bitmap.Canvas do
   begin
     Font.Color := clBlack;

@@ -42,3 +42,4 @@ Desktop.ini
 .DS_Store
 
 # FModel.res is required by FModel.dpr and intentionally tracked.
+profiles/EDF-20261023/fit.json

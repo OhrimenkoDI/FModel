@@ -5,7 +5,11 @@ uses
   uMain in 'uMain.pas' {Form2},
   uMotionModel in 'uMotionModel.pas',
   uPID in 'uPID.pas',
-  uParameters in 'uParameters.pas';
+  uParameters in 'uParameters.pas',
+  uGateNavigation in 'uGateNavigation.pas',
+  uGateNavigationPlus in 'uGateNavigationPlus.pas',
+  uAdaptiveGlide in 'uAdaptiveGlide.pas',
+  uRecordedPlant in 'uRecordedPlant.pas';
 
 {$R *.res}
 

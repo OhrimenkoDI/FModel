@@ -1,4 +1,4 @@
-object Form2: TForm2
+﻿object Form2: TForm2
   Left = 0
   Top = 0
   Caption = 'FModel - Sensor Dynamics'
@@ -37,7 +37,7 @@ object Form2: TForm2
     Left = 0
     Top = 0
     Width = 1096
-    Height = 76
+    Height = 118
     Align = alTop
     BevelOuter = bvNone
     TabOrder = 0
@@ -49,10 +49,13 @@ object Form2: TForm2
       Caption = '20'
     end
     object ResultLabel: TLabel
-      Left = 330
-      Top = 47
-      Width = 3
-      Height = 15
+      Left = 8
+      Top = 77
+      Width = 1080
+      Height = 36
+      AutoSize = False
+      WordWrap = True
+      Anchors = [akLeft, akTop, akRight]
     end
     object ProcessLabel: TLabel
       Left = 220
