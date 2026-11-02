@@ -202,6 +202,8 @@ begin
   PIDinit(FController);
   LoadSettings;
   AngleCorrectionCheckBox.Checked := FController.AngleCorrectionEnabled;
+  AngleCorrectionCheckBox.Visible := True;
+  AngleCorrectionCheckBox.Caption := 'Оценка смещения датчика';
   AutoStopCheckBox.Checked := FAutoStopEnabled;
   FReady := True;
   InitButtonClick(nil);
@@ -1111,6 +1113,35 @@ var
   LabelRects: array[0..6] of TRect;
   A, B, Radius, LeftX, RightX, BottomY, TopY, GridStep, Arrow, Angle: Double;
 
+  // Стрелки постоянной экранной длины для выбранного кадра истории.
+  procedure DrawPIDDirection(DX, DY: Double; LengthPixels: Integer;
+    Color: TColor; const Caption: string; LabelOffset: Integer);
+  var SX, SY, Size: Double; PX, PY, EX, EY: Integer;
+  begin
+    if (Frame.Model.X < LeftX) or (Frame.Model.X > RightX) or
+       (Frame.Model.Y < BottomY) or (Frame.Model.Y > TopY) then Exit;
+    SX := FMuXYZ[0]*DX*Cos(DegToRad(FFiXYZ[0])) +
+      FMuXYZ[1]*DY*Cos(DegToRad(FFiXYZ[1]));
+    SY := -FMuXYZ[0]*DX*Sin(DegToRad(FFiXYZ[0])) -
+      FMuXYZ[1]*DY*Sin(DegToRad(FFiXYZ[1]));
+    Size := Hypot(SX, SY);
+    if IsNan(Size) or IsInfinite(Size) or (Size = 0) then Exit;
+    SX := SX / Size; SY := SY / Size;
+    PX := d2x(Frame.Model.X, Frame.Model.Y, 0);
+    PY := d2y(Frame.Model.X, Frame.Model.Y, 0);
+    EX := PX + Round(LengthPixels*SX); EY := PY + Round(LengthPixels*SY);
+    with Image1.Picture.Bitmap.Canvas do
+    begin
+      Pen.Style := psSolid; Pen.Color := Color; Pen.Width := 2;
+      MoveTo(PX, PY); LineTo(EX, EY);
+      MoveTo(EX - Round(9*SX + 4*SY), EY - Round(9*SY - 4*SX));
+      LineTo(EX, EY);
+      LineTo(EX - Round(9*SX - 4*SY), EY - Round(9*SY + 4*SX));
+      Brush.Style := bsClear; Font.Color := Color;
+      TextOut(EnsureRange(EX + 7, 0, Max(0, W - TextWidth(Caption))),
+        EnsureRange(EY + LabelOffset, 0, Max(0, H - TextHeight(Caption))), Caption);
+    end;
+  end;
   // Both red target circles remain at their own completion coordinates.
   procedure DrawTarget(const Target: TReferencePoint; const Name: string;
     LabelColor: TColor; Finished: Boolean; LabelOffset: Integer);
@@ -1245,6 +1276,14 @@ begin
     DrawTarget(Frame.AdaptiveModel.ReferencePoint, 'Цель Adaptive', $000080FF, Frame.AdaptiveResult.Finished, 27);
     DrawTarget(Frame.GatePlusReferencePoint, 'Цель СВП+', clTeal, Frame.GatePlusResult.Finished, 46);
   end;
+  // Направление на собственную цель PID, независимо от задержки датчика.
+  DrawPIDDirection(Frame.Model.ReferencePoint.X - Frame.Model.X,
+    Frame.Model.ReferencePoint.Y - Frame.Model.Y, 80, clRed, 'На цель PID', -20);
+  // В EDF направление скорости задаётся Course, в простом профиле — Fi.
+  Angle := Frame.Model.Fi;
+  if Frame.Model.RecordedPlant.Enabled then Angle := DegToRad(Frame.Model.Course);
+  DrawPIDDirection(Frame.Model.V*Cos(Angle), Frame.Model.V*Sin(Angle),
+    52, clBlue, 'Движение PID', 8);
   // Каждому показателю отведена своя строка; высота зависит от фактического шрифта.
   SetLength(InfoLines, 22);
   InfoLines[0] := Format('Масштаб: %.3f пкс/м; диаметры: %g / %g м',
@@ -1261,12 +1300,13 @@ begin
   else
     InfoLines[4] := 'Угол на опорную точку: не определён';
   InfoLines[5] := 'Задержка: не оценивается';
-  if Frame.Controller.AngleCorrectionEnabled then
-    InfoLines[6] := Format('Поправка измерения: %.2f°',
-      [Frame.Controller.AdaptiveAngleCorrection])
+  if not Frame.Controller.AngleCorrectionEnabled then
+    InfoLines[6] := 'Оценка смещения: отключена'
+  else if Frame.Controller.BiasAdaptationActive then
+    InfoLines[6] := Format('Оценка смещения: %.2f° (подстройка)', [Frame.Controller.AdaptiveAngleCorrection])
   else
-    InfoLines[6] := 'Поправка измерения: отключена';
-  InfoLines[7] := Format('Измеренный угол после коррекции: %.2f°',
+    InfoLines[6] := Format('Оценка смещения: %.2f° (удержание / ожидание захвата)', [Frame.Controller.AdaptiveAngleCorrection]);
+  InfoLines[7] := Format('Угол для PID: %.2f°',
     [Frame.Controller.CorrectedAngle]);
   InfoLines[8] := Format('Измеренный угол: %.4f°', [RadToDeg(Frame.Model.MeasuredAngle)]);
   InfoLines[9] := Format('P = %.6f; I = %.6f; D = %.6f °/с',

@@ -1,179 +1,164 @@
 ﻿unit uPID;
+
 interface
+
 const
-  Kp = 6.0;
-  Ki = 10.0;
-  Kd = 0.500;
-  IntegralLimit = 60.0; // °/с, эквивалент прежних 10 рад/с.
-  BiasAdaptationGain = 0.15;
+  Kp = 3.87;
+  Ki = 22.88;
+  Kd = 0.10;
+  IntegralLimit = 20.0; // Максимальный вклад I, градусы/с.
+  // Подстройка смещения после непрерывного удержания цели в пределах порога.
+  BiasAdaptationGain = 0.6;
   BiasAngularSpeedWeight = 2.0;
-  BiasAdaptationStart = 0.8; // Время на начальный разворот, с.
+  BiasAdaptationStart = 0.2; // Выдержка захвата, с.
   BiasFilterTime = 0.15;
-  BiasErrorGate = 15.0;
-  BiasRateLimit = 20.0; // Максимальная скорость поправки, °/с.
+  BiasErrorGate = 1.0;
+  BiasRateLimit = 20.0;
   BiasLimit = 45.0;
-  DerivativeFilterTime = 0.02;
+  DerivativeFilterTime = 0.0; // Не используется: D берётся по CurrentW.
+  BiasGyroDeadband = 0.1; // Допуск нулевого вращения, градусы/с.
+
 type
   TPIDParameters = record
     Kp, Ki, Kd, IntegralLimit: Double;
-    BiasAdaptationGain, BiasAngularSpeedWeight, BiasAdaptationStart, BiasFilterTime: Double;
+    // BiasAngularSpeedWeight и DerivativeFilterTime оставлены для совместимости.
+    BiasAdaptationGain, BiasAngularSpeedWeight, BiasAdaptationStart,
+      BiasFilterTime: Double;
     BiasErrorGate, BiasRateLimit, BiasLimit, DerivativeFilterTime: Double;
   end;
 
   TPIDState = record
   private
-    FPreviousError, FPreviousDt: Double;
-    FTime, FFilteredIntegral, FFilteredW: Double;
-    FHasAngle, FPreviousAngleCorrection: Boolean;
+    FPreviousMeasuredAngle, FPreviousDt: Double;
+    FHasMeasuredAngle: Boolean;
+    FCaptureTime: Double;
   public
     Parameters: TPIDParameters;
+    // Оценка смещения по вращению после захвата неподвижной цели.
     AngleCorrectionEnabled: Boolean;
+    BiasAdaptationActive: Boolean;
+    BiasGyroRate: Double; // Сглаженная скорость для оценки смещения, градусы/с.
     AdaptiveAngleCorrection, CorrectedAngle: Double; // Градусы.
-    W, Wprop, Wint, Wdiff: Double; // Градусы в секунду.
-    InputW: Double; // Полученная текущая угловая скорость, °/с.
+    W, Wprop, Wint, Wdiff: Double; // Градусы/с (номинальная команда для EDF).
+    InputW: Double; // Измеренная угловая скорость, градусы/с.
+    MeasuredAngleRate: Double; // Скорость изменения измеренного угла, градусы/с.
+    HasMeasuredAngleRate: Boolean; // False на первом шаге и после сброса.
   end;
-// Для каждого датчика хранится отдельная запись TPIDState. Углы — градусы, скорости — °/с.
+
 function PIDDefaultParameters: TPIDParameters;
 procedure PIDinit(var State: TPIDState);
 procedure PIDreset(var State: TPIDState);
-function PIDupdate(var State: TPIDState; dt, MeasuredAngle, CurrentW: Double): Double;
+function PIDupdate(var State: TPIDState;
+  dt, MeasuredAngle, CurrentW: Double): Double;
 
 implementation
+
 uses System.Math, System.SysUtils;
-// Нормализует угол в градусах в пределах от -180 до 180.
+
 function Wrap(A: Double): Double;
 begin
-  Result:=A-Int(A/360)*360;
-  if Result>180 then Result:=Result-360
-  else if Result< -180 then Result:=Result+360;
+  Result := A - Int(A / 360) * 360;
+  if Result > 180 then Result := Result - 360
+  else if Result < -180 then Result := Result + 360;
 end;
-// Заполняет параметры регулятора значениями по умолчанию.
+
 function PIDDefaultParameters: TPIDParameters;
 begin
-  Result.Kp:=uPID.Kp;
-  Result.Ki:=uPID.Ki;
-  Result.Kd:=uPID.Kd;
-  Result.IntegralLimit:=uPID.IntegralLimit;
-  Result.BiasAdaptationGain:=uPID.BiasAdaptationGain;
-  Result.BiasAngularSpeedWeight:=uPID.BiasAngularSpeedWeight;
-  Result.BiasAdaptationStart:=uPID.BiasAdaptationStart;
-  Result.BiasFilterTime:=uPID.BiasFilterTime;
-  Result.BiasErrorGate:=uPID.BiasErrorGate;
-  Result.BiasRateLimit:=uPID.BiasRateLimit;
-  Result.BiasLimit:=uPID.BiasLimit;
-  Result.DerivativeFilterTime:=uPID.DerivativeFilterTime;
+  Result := Default(TPIDParameters);
+  Result.Kp := uPID.Kp;
+  Result.Ki := uPID.Ki;
+  Result.Kd := uPID.Kd;
+  Result.IntegralLimit := uPID.IntegralLimit;
+  Result.BiasAdaptationGain := uPID.BiasAdaptationGain;
+  Result.BiasAngularSpeedWeight := uPID.BiasAngularSpeedWeight;
+  Result.BiasAdaptationStart := uPID.BiasAdaptationStart;
+  Result.BiasFilterTime := uPID.BiasFilterTime;
+  Result.BiasErrorGate := uPID.BiasErrorGate;
+  Result.BiasRateLimit := uPID.BiasRateLimit;
+  Result.BiasLimit := uPID.BiasLimit;
+  Result.DerivativeFilterTime := uPID.DerivativeFilterTime;
 end;
 
-// Обнуляет состояние регулятора и задаёт начальные настройки.
 procedure PIDinit(var State: TPIDState);
 begin
-  State:=Default(TPIDState);
-  State.Parameters:=PIDDefaultParameters;
-  State.AngleCorrectionEnabled:=True;
-  State.FPreviousAngleCorrection:=True;
+  State := Default(TPIDState);
+  State.Parameters := PIDDefaultParameters;
+  State.AngleCorrectionEnabled := True;
 end;
 
-// Сбрасывает интеграторы, поправку, фильтры и историю одного датчика, сохраняя настройки.
+// Сбрасывает интегратор и показания, сохраняя параметры одной записи.
 procedure PIDreset(var State: TPIDState);
-var SavedParameters: TPIDParameters; Enabled: Boolean;
+var P: TPIDParameters; Enabled: Boolean;
 begin
-  SavedParameters:=State.Parameters;
-  Enabled:=State.AngleCorrectionEnabled;
-  State:=Default(TPIDState);
-  State.Parameters:=SavedParameters;
-  State.AngleCorrectionEnabled:=Enabled;
-  State.FPreviousAngleCorrection:=Enabled;
+  P := State.Parameters;
+  Enabled := State.AngleCorrectionEnabled;
+  State := Default(TPIDState);
+  State.Parameters := P;
+  State.AngleCorrectionEnabled := Enabled;
 end;
 
-// Возвращает квадратный корень модуля с сохранением знака.
-function sqrtp(p:double):double;
+// PID получает угол за вычетом оценки смещения. D = -Kd*CurrentW.
+// Оценка использует только угол, гироскоп и dt; истинное смещение модели недоступно.
+// Условие применимости: неподвижная цель, движение вперёд без бокового сноса.
+function PIDupdate(var State: TPIDState;
+  dt, MeasuredAngle, CurrentW: Double): Double;
+var Angle, Error, Alpha, BiasRate: Double;
 begin
-
-  if p<0 then
-    result:=-sqrt(-p)
-  else result:=sqrt(p);
-end;
-// Адаптирует поправку по Wint и текущей W, затем возвращает сумму P, I и D.
-// dt — текущий шаг, с; MeasuredAngle — полученный угол к опорной точке, градусы;
-// CurrentW — угловая скорость до нового воздействия, °/с.
-// Результат — рассчитанная угловая скорость объекта, °/с.
-// Входные данные: измеренный угол, длительность шага и текущая угловая скорость объекта.
-function PIDupdate(var State: TPIDState; dt, MeasuredAngle, CurrentW: Double): Double;
-var First: Boolean; Alpha, BiasRate, RawDerivative: Double;
-begin
-  // Некорректный вход отклоняем до изменения внутреннего состояния.
-  if IsNan(Dt) or IsInfinite(Dt) or (Dt<=0) or
+  if IsNan(dt) or IsInfinite(dt) or (dt <= 0) or
     IsNan(MeasuredAngle) or IsInfinite(MeasuredAngle) or
     IsNan(CurrentW) or IsInfinite(CurrentW) then
     raise EArgumentException.Create('Finite angle, angular speed and positive dt required');
 
-  // На первом шаге нет предыдущего угла для производной.
-  // При переключении коррекции также сбрасываем D, чтобы избежать её скачка.
-  First:=not State.FHasAngle or (State.AngleCorrectionEnabled<>State.FPreviousAngleCorrection);
+  Angle := Wrap(MeasuredAngle);
+  // Производная только исходного измерения, не поправки; пока для диагностики.
+  State.HasMeasuredAngleRate := State.FHasMeasuredAngle;
+  if State.HasMeasuredAngleRate then
+    State.MeasuredAngleRate := Wrap(Angle - State.FPreviousMeasuredAngle) / State.FPreviousDt
+  else State.MeasuredAngleRate := 0;
 
+  State.InputW := CurrentW;
+  State.BiasAdaptationActive := False;
+  if State.Parameters.BiasFilterTime = 0 then Alpha := 1
+  else Alpha := 1 - Exp(-dt / State.Parameters.BiasFilterTime);
+  if not State.FHasMeasuredAngle then State.BiasGyroRate := CurrentW
+  else State.BiasGyroRate := State.BiasGyroRate + Alpha*(CurrentW - State.BiasGyroRate);
 
-  // Сохраняем входную скорость для отображения и просмотра истории.
-  State.InputW:=CurrentW;
-
-  // Сглаживаем State.Wint прошлого шага и текущую скорость для медленной адаптации.
-  // Alpha учитывает dt; State.Parameters.BiasFilterTime задаёт постоянную времени фильтра.
-  if State.Parameters.BiasFilterTime = 0 then Alpha:=1
-  else Alpha:=1-Exp(-dt/State.Parameters.BiasFilterTime);
-  if State.Parameters.Ki = 0 then begin State.Wint:=0; State.FFilteredIntegral:=0; end;
-  State.FFilteredIntegral:=State.FFilteredIntegral+Alpha*(State.Wint-State.FFilteredIntegral);
-  State.FFilteredW:=State.FFilteredW+Alpha*(CurrentW-State.FFilteredW);
-
-  // Поправку меняем только при включённой коррекции, после начального разворота
-  // и при небольшом исправленном угле прошлого шага. Иначе сохраняем её значение.
-  if State.AngleCorrectionEnabled and State.FHasAngle and (State.FTime>=State.Parameters.BiasAdaptationStart) and
-    (Abs(State.FPreviousError)<State.Parameters.BiasErrorGate) then
+  Error := Angle;
+  if State.AngleCorrectionEnabled then
   begin
-    // Подстраиваем поправку против взвешенной суммы сглаженных State.Wint и State.W.
-    // BiasRate — скорость изменения поправки, ограниченная в °/с.
-    // Адаптация использует сумму двух сигналов; взаимная компенсация возможна при ненулевых слагаемых.
-    BiasRate:=EnsureRange(-State.Parameters.BiasAdaptationGain*
-      (State.FFilteredIntegral+State.Parameters.BiasAngularSpeedWeight*State.FFilteredW),-State.Parameters.BiasRateLimit,State.Parameters.BiasRateLimit);
+    Error := Wrap(Angle - State.AdaptiveAngleCorrection);
+    if State.FHasMeasuredAngle and (Abs(Error) < State.Parameters.BiasErrorGate) then
+      State.FCaptureTime := State.FCaptureTime + dt
+    else State.FCaptureTime := 0;
 
-    // Интегрируем скорость поправки по времени и ограничиваем сам угол.
-    // State.AdaptiveAngleCorrection — экспериментальная поправка угла по состоянию обратной связи.
-    State.AdaptiveAngleCorrection:=EnsureRange(State.AdaptiveAngleCorrection+BiasRate*dt,-State.Parameters.BiasLimit,State.Parameters.BiasLimit);
-  end;
+    // Вне захвата или около нулевой скорости оценка сохраняется, не обнуляется.
+    if State.FHasMeasuredAngle and (Abs(Error) < State.Parameters.BiasErrorGate) and
+      (State.FCaptureTime >= State.Parameters.BiasAdaptationStart) and
+      (Abs(State.BiasGyroRate) > BiasGyroDeadband) and
+      (State.Parameters.BiasAdaptationGain > 0) then
+    begin
+      BiasRate := EnsureRange(-State.Parameters.BiasAdaptationGain*State.BiasGyroRate,
+        -State.Parameters.BiasRateLimit, State.Parameters.BiasRateLimit);
+      State.AdaptiveAngleCorrection := EnsureRange(State.AdaptiveAngleCorrection + BiasRate*dt,
+        -State.Parameters.BiasLimit, State.Parameters.BiasLimit);
+      State.BiasAdaptationActive := True;
+    end;
+    Error := Wrap(Angle - State.AdaptiveAngleCorrection);
+  end
+  else State.FCaptureTime := 0;
 
-  // Вычитаем поправку только при включённой коррекции.
-  // Wrap возвращает угол в диапазон [-180; 180]. Задержку здесь не компенсируем.
-  State.CorrectedAngle:=MeasuredAngle;
-  if State.AngleCorrectionEnabled then State.CorrectedAngle:=State.CorrectedAngle-State.AdaptiveAngleCorrection;
-  State.CorrectedAngle:=Wrap(State.CorrectedAngle);
+  State.CorrectedAngle := Error;
+  State.Wprop := State.Parameters.Kp * Error;
+  if State.Parameters.Ki = 0 then State.Wint := 0
+  else State.Wint := EnsureRange(State.Wint + State.Parameters.Ki * Error * dt,
+    -State.Parameters.IntegralLimit, State.Parameters.IntegralLimit);
+  State.Wdiff := -State.Parameters.Kd * CurrentW;
+  State.W := State.Wprop + State.Wint + State.Wdiff;
 
-  // I: накапливаем исправленную ошибку. Ограничиваем вклад в выход, °/с.
-  // При нулевой ошибке накопленное значение интегратора сохраняется.
-  State.Wint:=EnsureRange(State.Wint+State.Parameters.Ki*State.CorrectedAngle*Dt,-State.Parameters.IntegralLimit,State.Parameters.IntegralLimit);
-
-  // D: оцениваем скорость изменения исправленного угла, включая изменение поправки.
-  if First or (State.Parameters.Kd = 0) then State.Wdiff:=0
-  else
-  begin
-    // Измерения поступают перед движением: их разделяет предыдущий шаг времени.
-    // Wrap исключает ложный скачок на полный оборот при переходе через +/-180°.
-    RawDerivative:=State.Parameters.Kd*Wrap(State.CorrectedAngle-State.FPreviousError)/State.FPreviousDt;
-
-    // Сглаживаем производную, уменьшая резкие реакции на задержанные измерения.
-    if State.Parameters.DerivativeFilterTime = 0 then State.Wdiff:=RawDerivative
-    else State.Wdiff:=State.Wdiff+(1-Exp(-dt/State.Parameters.DerivativeFilterTime))*(RawDerivative-State.Wdiff);
-  end;
-
-  // P: немедленная реакция, пропорциональная исправленному углу.
-  State.Wprop:=State.Parameters.Kp*State.CorrectedAngle;
-
-  // Складываем три вклада в °/с. Общего ограничения выхода State.W сейчас нет.
-  State.W:=State.Wprop+State.Wdiff +State.Wint;
-
-  // Запоминаем состояние для следующего вызова и продвигаем внутренние часы.
-  State.FPreviousError:=State.CorrectedAngle;
-  State.FHasAngle:=True;
-  State.FPreviousAngleCorrection:=State.AngleCorrectionEnabled;
-  State.FPreviousDt:=Dt;
-  State.FTime:=State.FTime+dt;
-  Result:=State.W;
+  State.FPreviousMeasuredAngle := Angle;
+  State.FPreviousDt := dt;
+  State.FHasMeasuredAngle := True;
+  Result := State.W;
 end;
+
 end.

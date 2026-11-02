@@ -203,8 +203,8 @@ begin
   end
   else
   begin
-    X := X + V * Cos(Fi-10*deg) * dt;
-    Y := Y + V * Sin(Fi-10*deg) * dt;
+    X := X + V * Cos(Fi) * dt;
+    Y := Y + V * Sin(Fi) * dt;
   end;
   ReferencePoint.Integrate(dt);
 end;

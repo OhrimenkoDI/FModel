@@ -1,4 +1,4 @@
-program PIDArrayTest;
+﻿program PIDArrayTest;
 {$APPTYPE CONSOLE}
 uses System.SysUtils, System.Math, uPID in '..\uPID.pas';
 // Сравнивает результаты независимых последовательностей вызовов.
@@ -36,7 +36,7 @@ begin
  if Sensors[0].AngleCorrectionEnabled then raise Exception.Create('Reset changed toggle');
  Near(Sensors[1].W,Saved.W,'Reset affected another sensor');
  Near(Sensors[1].AdaptiveAngleCorrection,Saved.AdaptiveAngleCorrection,'Reset affected another correction');
- PIDupdate(Sensors[0],0.01,20,5); Near(Sensors[0].Wdiff,0,'Reset kept derivative history');
+ PIDupdate(Sensors[0],0.01,20,5); Near(Sensors[0].Wdiff,-Sensors[0].Parameters.Kd*5,'D must damp current speed on first step');
  Writeln('PASS: 3 independent sensors, 3000 interleaved calls, per-sensor reset, preserved settings');
  except on E:Exception do begin Writeln(E.Message); ExitCode:=1; end; end;
 end.

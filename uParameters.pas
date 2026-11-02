@@ -48,13 +48,13 @@ const
     (Section: 'ReferencePoint'; Key: 'HeadingDegrees'; Caption: 'Начальный угол красной точки, °'; DefaultValue: ReferencePointHeadingDegrees; Minimum: -360; Maximum: 360; Page: 1),
     (Section: 'Controller'; Key: 'Kp'; Caption: 'Пропорциональный коэффициент Kp'; DefaultValue: Kp; Minimum: 0; Maximum: 1E6; Page: 2),
     (Section: 'Controller'; Key: 'Ki'; Caption: 'Интегральный коэффициент Ki'; DefaultValue: Ki; Minimum: 0; Maximum: 1E6; Page: 2),
-    (Section: 'Controller'; Key: 'Kd'; Caption: 'Дифференциальный коэффициент Kd'; DefaultValue: Kd; Minimum: 0; Maximum: 1E6; Page: 2),
+    (Section: 'Controller'; Key: 'Kd'; Caption: 'Демпфирование по угловой скорости Kd'; DefaultValue: Kd; Minimum: 0; Maximum: 1E6; Page: 2),
     (Section: 'Controller'; Key: 'IntegralLimitDegreesPerSecond'; Caption: 'Предел I (IntegralLimit), °/с'; DefaultValue: IntegralLimit; Minimum: 0; Maximum: 1E6; Page: 2),
     (Section: 'Controller'; Key: 'BiasAdaptationGain'; Caption: 'Коэффициент адаптации (BiasAdaptationGain)'; DefaultValue: BiasAdaptationGain; Minimum: 0; Maximum: 1E6; Page: 3),
     (Section: 'Controller'; Key: 'BiasAngularSpeedWeight'; Caption: 'Вес W (BiasAngularSpeedWeight)'; DefaultValue: BiasAngularSpeedWeight; Minimum: 0; Maximum: 1E6; Page: 3),
-    (Section: 'Controller'; Key: 'BiasAdaptationStart'; Caption: 'Начало адаптации (BiasAdaptationStart), с'; DefaultValue: BiasAdaptationStart; Minimum: 0; Maximum: 1E6; Page: 3),
-    (Section: 'Controller'; Key: 'BiasFilterTime'; Caption: 'Время фильтра адаптации (BiasFilterTime), с'; DefaultValue: BiasFilterTime; Minimum: 0; Maximum: 1E6; Page: 3),
-    (Section: 'Controller'; Key: 'BiasErrorGateDegrees'; Caption: 'Порог угла (BiasErrorGate), °'; DefaultValue: BiasErrorGate; Minimum: 0; Maximum: 180; Page: 3),
+    (Section: 'Controller'; Key: 'BiasAdaptationStart'; Caption: 'Выдержка захвата в пределах порога, с'; DefaultValue: BiasAdaptationStart; Minimum: 0; Maximum: 1E6; Page: 3),
+    (Section: 'Controller'; Key: 'BiasFilterTime'; Caption: 'Время сглаживания гироскопа, с'; DefaultValue: BiasFilterTime; Minimum: 0; Maximum: 1E6; Page: 3),
+    (Section: 'Controller'; Key: 'BiasErrorGateDegrees'; Caption: 'Порог исправленного угла для захвата, °'; DefaultValue: BiasErrorGate; Minimum: 0; Maximum: 180; Page: 3),
     (Section: 'Controller'; Key: 'BiasRateLimitDegrees'; Caption: 'Скорость поправки (BiasRateLimit), °/с'; DefaultValue: BiasRateLimit; Minimum: 0; Maximum: 1E6; Page: 3),
     (Section: 'Controller'; Key: 'BiasLimitDegrees'; Caption: 'Предел поправки (BiasLimit), °'; DefaultValue: BiasLimit; Minimum: 0; Maximum: 180; Page: 3),
     (Section: 'Controller'; Key: 'DerivativeFilterTime'; Caption: 'Время фильтра D (DerivativeFilterTime), с'; DefaultValue: DerivativeFilterTime; Minimum: 0; Maximum: 1E6; Page: 3),
@@ -227,6 +227,13 @@ begin
     FEditors[Index].SetBounds(478, Y, 145, 25);
     L.FocusControl := FEditors[Index];
   end;
+  // Старые настройки веса скорости и фильтра D не участвуют в оценке.
+  FEditors[14].Enabled := False;
+  FEditors[20].Enabled := False;
+  L := TLabel.Create(Self); L.Parent := Panels[3];
+  L.SetBounds(12, 310, 640, 60); L.WordWrap := True;
+  L.Caption := 'Оценка по гироскопу: неподвижная цель, движение вперёд без сноса. ' +
+    'При скорости в пределах ±0,1°/с поправка сохраняется. Для движущейся цели оценка не является монтажным смещением.';
   FPages.ActivePageIndex := 0;
 end;
 
